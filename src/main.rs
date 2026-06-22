@@ -22,10 +22,18 @@ fn main() {
     let lexer = token::Token::lexer(&source);
     let tokens: Vec<(token::Token, std::ops::Range<usize>)> = lexer.spanned().collect();
 
-    if tokens.iter().any(|(t, _)| matches!(t, token::Token::Error)) {
+        if tokens.iter().any(|(t, _)| matches!(t, token::Token::Error)) {
         eprintln!("Lexical error: unexpected characters in source");
         std::process::exit(1);
     }
+
+    // ---------- DEBUG: печать всех токенов ----------
+    println!("=== Tokens ({}) ===", tokens.len());
+    for (tok, span) in &tokens {
+        println!("{:>4?}  {:?}", tok, span);
+    }
+    println!("=====================");
+    // ------------------------------------------------
 
     let mut parser = parser::Parser::new(tokens);
     let program = parser.parse_program().unwrap_or_else(|e| {
@@ -33,7 +41,11 @@ fn main() {
         std::process::exit(1);
     });
 
-    let c_code = codegen::generate(&program);
+    let c_code = codegen::generate(&program).unwrap_or_else(|e| {
+        eprintln!("Compilation error: {}", e);
+        std::process::exit(1);
+    });
+
     println!("Generated C code:\n{}", c_code);
 
     let c_path = "temp_output.c";
@@ -41,7 +53,7 @@ fn main() {
 
     let output_name = if cfg!(windows) { "hello.exe" } else { "hello" };
     let status = Command::new("gcc")
-        .args(&[c_path, "-o", output_name])
+        .args(&[c_path, "-o", output_name, "-lm"])
         .status()
         .expect("Failed to run gcc. Is GCC installed and in PATH?");
 
