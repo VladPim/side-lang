@@ -33,14 +33,14 @@ impl Parser {
             Ok(())
         } else {
             Err(format!(
-                "Syntax error: expected {:?}, but found {:?}",
+                "Syntax error: expected {:?}, got {:?}",
                 expected,
                 self.peek()
             ))
         }
     }
 
-    // --- Разбор функции ---
+    // -------- Функции ----------
     fn parse_function(&mut self) -> Result<Function, String> {
         self.expect(Token::Fn)?;
         let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
@@ -49,15 +49,29 @@ impl Parser {
         } else {
             return Err("Expected function name after 'fn'".to_string());
         };
-
-        // Тело функции в фигурных скобках
+        self.expect(Token::LParen)?;
+        let mut params = vec![];
+        if self.peek() != Some(&Token::RParen) {
+            loop {
+                if let Some(Token::Identifier(p)) = self.peek().cloned() {
+                    self.advance();
+                    params.push(p);
+                } else {
+                    return Err("Expected parameter name".to_string());
+                }
+                if self.peek() == Some(&Token::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(Token::RParen)?;
         self.expect(Token::LBrace)?;
         let body = self.parse_block()?;
-        // RBrace уже съедена в parse_block
-        Ok(Function { name, body })
+        Ok(Function { name, params, body })
     }
 
-    /// parse_block: считывает стейтменты пока не встретит '}'
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = vec![];
         while self.peek() != Some(&Token::RBrace) && self.peek().is_some() {
@@ -67,13 +81,18 @@ impl Parser {
         Ok(stmts)
     }
 
-    // --- Операторы ---
+    // -------- Операторы ----------
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek() {
             Some(Token::Let) => self.parse_let(),
             Some(Token::If) => self.parse_if(),
+            Some(Token::While) => self.parse_while(),
+            Some(Token::Return) => self.parse_return(),
+            Some(Token::Break) => { self.advance(); Ok(Stmt::Break) }
+            Some(Token::Continue) => { self.advance(); Ok(Stmt::Continue) }
             Some(Token::Io) => self.parse_io_print(),
-            other => Err(format!("Unexpected token: {:?}", other)),
+            Some(Token::Identifier(_)) => self.parse_assign_or_call_stmt(),
+            other => Err(format!("Unexpected token at statement start: {:?}", other)),
         }
     }
 
@@ -90,25 +109,55 @@ impl Parser {
         Ok(Stmt::Let { name, value })
     }
 
+    fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
+        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
+            self.advance();
+            n
+        } else {
+            return Err("Expected variable name for assignment".to_string());
+        };
+        if self.peek() == Some(&Token::Equals) {
+            self.expect(Token::Equals)?;
+            let value = self.parse_expr()?;
+            Ok(Stmt::Assign { name, value })
+        } else {
+            Err("Only assignment is allowed for identifiers in statement position".to_string())
+        }
+    }
+
     fn parse_if(&mut self) -> Result<Stmt, String> {
         self.expect(Token::If)?;
         let condition = self.parse_expr()?;
         self.expect(Token::LBrace)?;
         let then_body = self.parse_block()?;
-        // Проверяем, есть ли else
         let else_body = if self.peek() == Some(&Token::Else) {
             self.advance();
-            self.expect(Token::LBrace)?;
-            let else_stmts = self.parse_block()?;
-            Some(else_stmts)
+            if self.peek() == Some(&Token::If) {
+                let else_if_stmt = self.parse_if()?;
+                Some(vec![else_if_stmt])
+            } else {
+                self.expect(Token::LBrace)?;
+                let else_stmts = self.parse_block()?;
+                Some(else_stmts)
+            }
         } else {
             None
         };
-        Ok(Stmt::If {
-            condition,
-            then_body,
-            else_body,
-        })
+        Ok(Stmt::If { condition, then_body, else_body })
+    }
+
+    fn parse_while(&mut self) -> Result<Stmt, String> {
+        self.expect(Token::While)?;
+        let condition = self.parse_expr()?;
+        self.expect(Token::LBrace)?;
+        let body = self.parse_block()?;
+        Ok(Stmt::While { condition, body })
+    }
+
+    fn parse_return(&mut self) -> Result<Stmt, String> {
+        self.expect(Token::Return)?;
+        let expr = self.parse_expr()?;
+        Ok(Stmt::Return(expr))
     }
 
     fn parse_io_print(&mut self) -> Result<Stmt, String> {
@@ -121,12 +170,42 @@ impl Parser {
         Ok(Stmt::IoPrint(expr))
     }
 
-    // --- Выражения (с добавлением операторов сравнения) ---
+    // -------- Выражения ----------
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_comparison()
+        self.parse_or()
     }
 
-    // Уровень сравнения (ниже арифметики)
+    // or (низший приоритет)
+    fn parse_or(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_and()?;
+        while self.peek() == Some(&Token::Or) {
+            self.advance();
+            let right = self.parse_and()?;
+            left = Expr::Binary {
+                left: Box::new(left),
+                op: BinOp::Or,
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    // and
+    fn parse_and(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_comparison()?;
+        while self.peek() == Some(&Token::And) {
+            self.advance();
+            let right = self.parse_comparison()?;
+            left = Expr::Binary {
+                left: Box::new(left),
+                op: BinOp::And,
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    // сравнения
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_addition()?;
         while let Some(op) = self.peek() {
@@ -141,16 +220,12 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_addition()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op: binop,
-                right: Box::new(right),
-            };
+            left = Expr::Binary { left: Box::new(left), op: binop, right: Box::new(right) };
         }
         Ok(left)
     }
 
-    // Арифметика сложения
+    // сложение/вычитание
     fn parse_addition(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_multiplication()?;
         while let Some(op) = self.peek() {
@@ -158,20 +233,12 @@ impl Parser {
                 Token::Plus => {
                     self.advance();
                     let right = self.parse_multiplication()?;
-                    left = Expr::Binary {
-                        left: Box::new(left),
-                        op: BinOp::Add,
-                        right: Box::new(right),
-                    };
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Add, right: Box::new(right) };
                 }
                 Token::Minus => {
                     self.advance();
                     let right = self.parse_multiplication()?;
-                    left = Expr::Binary {
-                        left: Box::new(left),
-                        op: BinOp::Sub,
-                        right: Box::new(right),
-                    };
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Sub, right: Box::new(right) };
                 }
                 _ => break,
             }
@@ -179,28 +246,20 @@ impl Parser {
         Ok(left)
     }
 
-    // Арифметика умножения
+    // умножение/деление
     fn parse_multiplication(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_primary()?;
+        let mut left = self.parse_unary()?;
         while let Some(op) = self.peek() {
             match op {
                 Token::Star => {
                     self.advance();
-                    let right = self.parse_primary()?;
-                    left = Expr::Binary {
-                        left: Box::new(left),
-                        op: BinOp::Mul,
-                        right: Box::new(right),
-                    };
+                    let right = self.parse_unary()?;
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Mul, right: Box::new(right) };
                 }
                 Token::Slash => {
                     self.advance();
-                    let right = self.parse_primary()?;
-                    left = Expr::Binary {
-                        left: Box::new(left),
-                        op: BinOp::Div,
-                        right: Box::new(right),
-                    };
+                    let right = self.parse_unary()?;
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Div, right: Box::new(right) };
                 }
                 _ => break,
             }
@@ -208,6 +267,18 @@ impl Parser {
         Ok(left)
     }
 
+    // унарный not
+    fn parse_unary(&mut self) -> Result<Expr, String> {
+        if self.peek() == Some(&Token::Not) {
+            self.advance();
+            let expr = self.parse_unary()?;
+            Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) })
+        } else {
+            self.parse_primary()
+        }
+    }
+
+    // атомарные элементы
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.peek().cloned() {
             Some(Token::Number(n)) => {
@@ -220,7 +291,38 @@ impl Parser {
             }
             Some(Token::Identifier(name)) => {
                 self.advance();
-                Ok(Expr::Variable(name))
+                if self.peek() == Some(&Token::LParen) {
+                    self.expect(Token::LParen)?;
+                    let mut args = vec![];
+                    if self.peek() != Some(&Token::RParen) {
+                        loop {
+                            args.push(self.parse_expr()?);
+                            if self.peek() == Some(&Token::Comma) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.expect(Token::RParen)?;
+                    Ok(Expr::Call { name, args })
+                } else {
+                    Ok(Expr::Variable(name))
+                }
+            }
+            Some(Token::Io) => {
+                self.advance();
+                self.expect(Token::Dot)?;
+                self.expect(Token::Input)?;
+                self.expect(Token::LParen)?;
+                let prompt = if let Some(Token::StringLiteral(s)) = self.peek().cloned() {
+                    self.advance();
+                    s
+                } else {
+                    return Err("Expected prompt string for io.input".to_string());
+                };
+                self.expect(Token::RParen)?;
+                Ok(Expr::Input(prompt))
             }
             Some(Token::LParen) => {
                 self.advance();
