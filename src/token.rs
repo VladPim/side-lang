@@ -3,19 +3,28 @@ use logos::Logos;
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
     // Ключевые слова
-    #[token("fn")]     Fn,
-    #[token("let")]    Let,
-    #[token("if")]     If,
-    #[token("else")]   Else,
+    #[token("fn")]       Fn,
+    #[token("let")]      Let,
+    #[token("if")]       If,
+    #[token("else")]     Else,
+    #[token("while")]    While,
+    #[token("return")]   Return,
+    #[token("input")]    Input,
+    #[token("and")]      And,
+    #[token("or")]       Or,
+    #[token("not")]      Not,
+    #[token("break")]    Break,
+    #[token("continue")] Continue,
 
     // Символы
     #[token(".")]      Dot,
+    #[token(",")]      Comma,
     #[token("(")]      LParen,
-    #[token(")")]      RParen,
+    #[token(r#")"#)]   RParen,
     #[token("{")]      LBrace,
     #[token("}")]      RBrace,
-    #[token("=")]      Equals,         // присваивание
-    #[token("==")]     EqualEqual,     // сравнения
+    #[token("=")]      Equals,
+    #[token("==")]     EqualEqual,
     #[token("!=")]     NotEqual,
     #[token("<")]      Less,
     #[token(">")]      Greater,
@@ -28,7 +37,7 @@ pub enum Token {
     #[token("*")]      Star,
     #[token("/")]      Slash,
 
-    // Идентификатор io.print (io – это отдельный токен? Сделаем io)
+    // io
     #[token("io")]     Io,
     #[token("print")]  Print,
 
@@ -42,11 +51,9 @@ pub enum Token {
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Identifier(String),
 
-    // Комментарии ## до конца строки
     #[regex(r"##[^\n]*", logos::skip)]
     Comment,
 
-    // Пропуск пробелов
     #[regex(r"[ \t\r\n\f]+", logos::skip)]
     #[error]
     Error,
