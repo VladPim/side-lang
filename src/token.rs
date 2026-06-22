@@ -2,7 +2,6 @@ use logos::Logos;
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
-    // Ключевые слова
     #[token("fn")]       Fn,
     #[token("let")]      Let,
     #[token("if")]       If,
@@ -18,7 +17,6 @@ pub enum Token {
     #[token("int")]      Int,
     #[token("str")]      Str,
 
-    // Символы
     #[token(".")]      Dot,
     #[token(",")]      Comma,
     #[token("(")]      LParen,
@@ -35,17 +33,14 @@ pub enum Token {
     #[token("<=")]     LessEqual,
     #[token(">=")]     GreaterEqual,
 
-    // Арифметика
     #[token("+")]      Plus,
     #[token("-")]      Minus,
     #[token("*")]      Star,
     #[token("/")]      Slash,
 
-    // io
     #[token("io")]     Io,
     #[token("print")]  Print,
 
-    // Литералы
     #[regex(r#""[^"]*""#, |lex| lex.slice()[1..lex.slice().len()-1].to_string())]
     StringLiteral(String),
 
