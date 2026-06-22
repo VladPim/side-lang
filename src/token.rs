@@ -7,6 +7,7 @@ pub enum Token {
     #[token("if")]       If,
     #[token("else")]     Else,
     #[token("while")]    While,
+    #[token("for")]      For,
     #[token("return")]   Return,
     #[token("input")]    Input,
     #[token("and")]      And,
@@ -16,6 +17,9 @@ pub enum Token {
     #[token("continue")] Continue,
     #[token("int")]      Int,
     #[token("str")]      Str,
+    #[token("double")]   Double,
+    #[token("struct")]   Struct,
+    #[token("->")]       Arrow,
 
     #[token(".")]      Dot,
     #[token(",")]      Comma,
@@ -43,6 +47,9 @@ pub enum Token {
 
     #[regex(r#""[^"]*""#, |lex| lex.slice()[1..lex.slice().len()-1].to_string())]
     StringLiteral(String),
+
+    #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse())]
+    DoubleLiteral(f64),
 
     #[regex("[0-9]+", |lex| lex.slice().parse())]
     Number(i32),
