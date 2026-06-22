@@ -32,6 +32,11 @@ pub enum Stmt {
         name: String,
         value: Expr,
     },
+    AssignIndex {
+        name: String,
+        index: Expr,
+        value: Expr,
+    },
     IoPrint(Vec<Expr>),
     If {
         condition: Expr,
@@ -60,6 +65,11 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
+    },
+    ArrayLiteral(Vec<Expr>),
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
     },
     Binary {
         left: Box<Expr>,
