@@ -20,7 +20,12 @@ pub fn generate(program: &Program) -> String {
         };
 
         let params_str = func.params.iter()
-            .map(|p| format!("int {}", p))
+            .map(|p| {
+                match p.param_type {
+                    Type::Int => format!("int {}", p.name),
+                    Type::Str => format!("const char* {}", p.name),
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(&format!("int {}(", c_name));
@@ -51,19 +56,22 @@ fn generate_stmts(stmts: &[Stmt], out: &mut String, indent: usize) {
                 generate_expr(value, out);
                 out.push_str(";\n");
             }
-            Stmt::IoPrint(expr) => {
-                match expr {
-                    Expr::StringLiteral(_) => {
-                        out.push_str(&format!("{}printf(\"%s\\n\", ", pad));
-                        generate_expr(expr, out);
-                        out.push_str(");\n");
-                    }
-                    _ => {
-                        out.push_str(&format!("{}printf(\"%d\\n\", ", pad));
-                        generate_expr(expr, out);
-                        out.push_str(");\n");
+            Stmt::IoPrint(args) => {
+                for arg in args {
+                    match arg {
+                        Expr::StringLiteral(_) => {
+                            out.push_str(&format!("{}printf(\"%s\", ", pad));
+                            generate_expr(arg, out);
+                            out.push_str(");\n");
+                        }
+                        _ => {
+                            out.push_str(&format!("{}printf(\"%d\", ", pad));
+                            generate_expr(arg, out);
+                            out.push_str(");\n");
+                        }
                     }
                 }
+                out.push_str(&format!("{}printf(\"\\n\");\n", pad));
             }
             Stmt::If { condition, then_body, else_body } => {
                 out.push_str(&format!("{}if (", pad));
@@ -94,6 +102,15 @@ fn generate_stmts(stmts: &[Stmt], out: &mut String, indent: usize) {
             }
             Stmt::Continue => {
                 out.push_str(&format!("{}continue;\n", pad));
+            }
+            Stmt::CallStmt { name, args } => {
+                let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
+                out.push_str(&format!("{}{}(", pad, c_name));
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { out.push_str(", "); }
+                    generate_expr(arg, out);
+                }
+                out.push_str(");\n");
             }
         }
     }
@@ -139,6 +156,11 @@ fn generate_expr(expr: &Expr, out: &mut String) {
             match op {
                 UnaryOp::Not => {
                     out.push_str("!(");
+                    generate_expr(expr, out);
+                    out.push(')');
+                }
+                UnaryOp::Neg => {
+                    out.push_str("-(");
                     generate_expr(expr, out);
                     out.push(')');
                 }
