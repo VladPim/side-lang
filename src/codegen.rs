@@ -1,7 +1,6 @@
 use crate::ast::*;
 use std::collections::HashMap;
 
-// ---------- Область видимости ----------
 #[derive(Clone)]
 struct Scope {
     vars: HashMap<String, Type>,
@@ -9,51 +8,25 @@ struct Scope {
 }
 
 impl Scope {
-    fn new() -> Self {
-        Scope { vars: HashMap::new(), parent: None }
-    }
-
-    fn push(&self) -> Self {
-        Scope { vars: HashMap::new(), parent: Some(Box::new(self.clone())) }
-    }
-
-    fn declare(&mut self, name: &str, tp: Type) {
-        self.vars.insert(name.to_string(), tp);
-    }
-
+    fn new() -> Self { Scope { vars: HashMap::new(), parent: None } }
+    fn push(&self) -> Self { Scope { vars: HashMap::new(), parent: Some(Box::new(self.clone())) } }
+    fn declare(&mut self, name: &str, tp: Type) { self.vars.insert(name.to_string(), tp); }
     fn get(&self, name: &str) -> Option<Type> {
-        if let Some(tp) = self.vars.get(name) {
-            return Some(tp.clone());
-        }
-        if let Some(ref parent) = self.parent {
-            return parent.get(name);
-        }
-        None
+        self.vars.get(name).cloned().or_else(|| self.parent.as_ref()?.get(name))
     }
 }
 
-// ---------- Генерация кода ----------
 pub fn generate(program: &Program) -> Result<String, String> {
     let mut out = String::new();
-    out.push_str("#include <stdio.h>\n");
-    out.push_str("#include <stdlib.h>\n");
-    out.push_str("#include <string.h>\n");
-    out.push_str("#include <math.h>\n");
-    out.push_str("#include <time.h>\n\n");
+    out.push_str("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <time.h>\n\n");
 
-    // Глобальные константы
     for c in &program.constants {
-        let c_type = match &c.value {
-            Expr::DoubleLiteral(_) => "const double",
-            Expr::StringLiteral(_) => "const char*",
-            _ => "const int",
-        };
+        let c_type = match &c.value { Expr::DoubleLiteral(_) => "const double", Expr::StringLiteral(_) => "const char*", _ => "const int" };
         out.push_str(&format!("{} {} = ", c_type, c.name));
         generate_expr(&c.value, &mut out, &Scope::new())?;
         out.push_str(";\n");
     }
 
-    // Объявления структур
     for s in &program.structs {
         out.push_str(&format!("typedef struct {{\n"));
         for f in &s.fields {
@@ -69,109 +42,65 @@ pub fn generate(program: &Program) -> Result<String, String> {
         out.push_str(&format!("}} side_{};\n\n", s.name));
     }
 
-    // Рантайм-функции
-    out.push_str(
-        r#"
+    out.push_str(r#"
 void side_arr_push(int** arr, int* size, int* cap, int value) {
-    if (*size >= *cap) {
-        *cap = (*cap == 0) ? 2 : (*cap) * 2;
-        *arr = realloc(*arr, (*cap) * sizeof(int));
-    }
-    (*arr)[*size] = value;
-    (*size)++;
+    if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(int)); }
+    (*arr)[*size] = value; (*size)++;
 }
 int side_arr_pop(int** arr, int* size, int* cap) {
-    if (*size <= 0) return -1;
-    int val = (*arr)[*size - 1];
-    (*size)--;
-    return val;
+    if (*size <= 0) return -1; int val = (*arr)[*size - 1]; (*size)--; return val;
 }
 int* side_arr_create(int n, int* vals) {
-    int* arr = malloc(n * sizeof(int));
-    for (int i = 0; i < n; i++) arr[i] = vals[i];
-    return arr;
+    int* arr = malloc(n * sizeof(int)); for (int i = 0; i < n; i++) arr[i] = vals[i]; return arr;
 }
 void side_arr_push_double(double** arr, int* size, int* cap, double value) {
-    if (*size >= *cap) {
-        *cap = (*cap == 0) ? 2 : (*cap) * 2;
-        *arr = realloc(*arr, (*cap) * sizeof(double));
-    }
-    (*arr)[*size] = value;
-    (*size)++;
+    if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(double)); }
+    (*arr)[*size] = value; (*size)++;
 }
 double side_arr_pop_double(double** arr, int* size, int* cap) {
-    if (*size <= 0) return -1.0;
-    double val = (*arr)[*size - 1];
-    (*size)--;
-    return val;
+    if (*size <= 0) return -1.0; double val = (*arr)[*size - 1]; (*size)--; return val;
 }
 double* side_arr_create_double(int n, double* vals) {
-    double* arr = malloc(n * sizeof(double));
-    for (int i = 0; i < n; i++) arr[i] = vals[i];
-    return arr;
+    double* arr = malloc(n * sizeof(double)); for (int i = 0; i < n; i++) arr[i] = vals[i]; return arr;
 }
+int side_input(const char* prompt) { int val; printf("%s", prompt); scanf("%d", &val); return val; }
+int side_time() { return (int)(clock() * 1000 / CLOCKS_PER_SEC); }
+char* side_str(int n) { static char buf[20]; sprintf(buf, "%d", n); return buf; }
+char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); return buf; }
+"#);
 
-int side_input(const char* prompt) {
-    int val;
-    printf("%s", prompt);
-    scanf("%d", &val);
-    return val;
-}
-
-int side_time() {
-    return (int)(clock() * 1000 / CLOCKS_PER_SEC);
-}
-
-char* side_str(int n) {
-    static char buf[20];
-    sprintf(buf, "%d", n);
-    return buf;
-}
-
-char* side_str_double(double n) {
-    static char buf[30];
-    sprintf(buf, "%f", n);
-    return buf;
-}
-"#,
-    );
-
+    // Генерируем сначала все функции, кроме main, чтобы main могла их вызывать
+    let mut non_main = Vec::new();
+    let mut mains = Vec::new();
     for func in &program.functions {
-        let c_name = if func.name == "main" {
-            "side_main".to_string()
+        if func.name == "main" {
+            mains.push(func);
         } else {
-            format!("side_{}", func.name)
-        };
+            non_main.push(func);
+        }
+    }
+    for func in non_main.iter().chain(mains.iter()) {
+        let c_name = if func.name == "main" { "side_main".to_string() } else { format!("side_{}", func.name) };
+        let params_str = func.params.iter().map(|p| match p.param_type {
+            Type::Int => format!("int {}", p.name),
+            Type::Double => format!("double {}", p.name),
+            Type::Str => format!("const char* {}", p.name),
+            Type::Array => format!("int* {}", p.name),
+            Type::DoubleArray => format!("double* {}", p.name),
+            Type::Struct(ref name) => format!("side_{} {}", name, p.name),
+        }).collect::<Vec<_>>().join(", ");
 
-        let params_str = func.params.iter()
-            .map(|p| match p.param_type {
-                Type::Int => format!("int {}", p.name),
-                Type::Double => format!("double {}", p.name),
-                Type::Str => format!("const char* {}", p.name),
-                Type::Array => format!("int* {}", p.name),
-                Type::DoubleArray => format!("double* {}", p.name),
-                Type::Struct(ref name) => format!("side_{} {}", name, p.name),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let return_c_type = type_to_c(&func.return_type);
-        out.push_str(&format!("{} {}(", return_c_type, c_name));
+        out.push_str(&format!("{} {}(", type_to_c(&func.return_type), c_name));
         out.push_str(&params_str);
         out.push_str(") {\n");
 
         let mut scope = Scope::new();
-        for p in &func.params {
-            scope.declare(&p.name, p.param_type.clone());
-        }
-
+        for p in &func.params { scope.declare(&p.name, p.param_type.clone()); }
         generate_stmts(&func.body, &mut out, 1, &mut scope, &program.functions, &func.return_type)?;
         out.push_str("    return 0;\n}\n\n");
     }
 
-    out.push_str("int main() {\n");
-    out.push_str("    return side_main();\n");
-    out.push_str("}\n");
+    out.push_str("int main() { return side_main(); }\n");
     Ok(out)
 }
 
