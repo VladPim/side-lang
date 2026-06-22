@@ -16,16 +16,18 @@ pub struct Param {
     pub param_type: Type,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Int,
     Str,
+    Array,          // динамический массив целых чисел
 }
 
 #[derive(Debug)]
 pub enum Stmt {
     Let {
         name: String,
+        var_type: Type,     // тип переменной
         value: Expr,
     },
     Assign {
@@ -66,7 +68,7 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
-    ArrayLiteral(Vec<Expr>),
+    ArrayLiteral(Vec<Expr>),        // может быть пустым
     Index {
         array: Box<Expr>,
         index: Box<Expr>,
