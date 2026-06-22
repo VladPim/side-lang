@@ -1,5 +1,6 @@
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub imports: Vec<String>,
     pub structs: Vec<StructDef>,
     pub constants: Vec<Constant>,
     pub functions: Vec<Function>,
