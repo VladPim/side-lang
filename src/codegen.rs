@@ -47,12 +47,32 @@ fn generate_stmts(stmts: &[Stmt], out: &mut String, indent: usize) {
     for stmt in stmts {
         match stmt {
             Stmt::Let { name, value } => {
-                out.push_str(&format!("{}int {} = ", pad, name));
-                generate_expr(value, out);
-                out.push_str(";\n");
+                match value {
+                    Expr::ArrayLiteral(elements) => {
+                        // объявление массива с инициализацией
+                        out.push_str(&format!("{}int {}[] = {{", pad, name));
+                        for (i, elem) in elements.iter().enumerate() {
+                            if i > 0 { out.push_str(", "); }
+                            generate_expr(elem, out);
+                        }
+                        out.push_str("};\n");
+                    }
+                    _ => {
+                        out.push_str(&format!("{}int {} = ", pad, name));
+                        generate_expr(value, out);
+                        out.push_str(";\n");
+                    }
+                }
             }
             Stmt::Assign { name, value } => {
                 out.push_str(&format!("{}{} = ", pad, name));
+                generate_expr(value, out);
+                out.push_str(";\n");
+            }
+            Stmt::AssignIndex { name, index, value } => {
+                out.push_str(&format!("{}{}[", pad, name));
+                generate_expr(index, out);
+                out.push_str("] = ");
                 generate_expr(value, out);
                 out.push_str(";\n");
             }
@@ -130,6 +150,16 @@ fn generate_expr(expr: &Expr, out: &mut String) {
                 generate_expr(arg, out);
             }
             out.push(')');
+        }
+        Expr::ArrayLiteral(_) => {
+            // В выражениях не ожидается, но на всякий случай – фигурные скобки
+            out.push_str("{/*array literal not supported in expression*/}");
+        }
+        Expr::Index { array, index } => {
+            generate_expr(array, out);
+            out.push('[');
+            generate_expr(index, out);
+            out.push(']');
         }
         Expr::Binary { left, op, right } => {
             out.push('(');
