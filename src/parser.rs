@@ -115,6 +115,7 @@ impl Parser {
         Ok(Stmt::Let { name, value })
     }
 
+    /// Разбор присваивания, присваивания с индексом или вызова функции
     fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
         let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
             self.advance();
@@ -123,16 +124,30 @@ impl Parser {
             return Err("Expected identifier".to_string());
         };
 
+        // Проверяем индексацию: name[ ... ]
+        if self.peek() == Some(&Token::LBracket) {
+            self.expect(Token::LBracket)?;
+            let index = self.parse_expr()?;
+            self.expect(Token::RBracket)?;
+            self.expect(Token::Equals)?;
+            let value = self.parse_expr()?;
+            return Ok(Stmt::AssignIndex { name, index, value });
+        }
+
+        // Вызов функции?
         if self.peek() == Some(&Token::LParen) {
             let args = self.parse_call_args()?;
-            if self.peek() != Some(&Token::Equals) {
-                return Ok(Stmt::CallStmt { name, args });
-            } else {
+            if self.peek() == Some(&Token::Equals) {
+                // присваивание результата вызова: name() = expr
                 self.expect(Token::Equals)?;
                 let value = Expr::Call { name: name.clone(), args };
                 Ok(Stmt::Assign { name: name.clone(), value })
+            } else {
+                // вызов как стейтмент
+                Ok(Stmt::CallStmt { name, args })
             }
         } else {
+            // Обычное присваивание
             self.expect(Token::Equals)?;
             let value = self.parse_expr()?;
             Ok(Stmt::Assign { name, value })
@@ -306,7 +321,22 @@ impl Parser {
             let expr = self.parse_unary()?;
             return Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr) });
         }
-        self.parse_primary()
+        self.parse_postfix()
+    }
+
+    /// После первичного выражения обрабатываем постфиксные операции [индекс]
+    fn parse_postfix(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_primary()?;
+        while self.peek() == Some(&Token::LBracket) {
+            self.advance();
+            let index = self.parse_expr()?;
+            self.expect(Token::RBracket)?;
+            expr = Expr::Index {
+                array: Box::new(expr),
+                index: Box::new(index),
+            };
+        }
+        Ok(expr)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
@@ -321,12 +351,30 @@ impl Parser {
             }
             Some(Token::Identifier(name)) => {
                 self.advance();
+                // Вызов функции?
                 if self.peek() == Some(&Token::LParen) {
                     let args = self.parse_call_args()?;
                     Ok(Expr::Call { name, args })
                 } else {
                     Ok(Expr::Variable(name))
                 }
+            }
+            Some(Token::LBracket) => {
+                // Литерал массива
+                self.advance();
+                let mut elements = vec![];
+                if self.peek() != Some(&Token::RBracket) {
+                    loop {
+                        elements.push(self.parse_expr()?);
+                        if self.peek() == Some(&Token::Comma) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(Token::RBracket)?;
+                Ok(Expr::ArrayLiteral(elements))
             }
             Some(Token::Io) => {
                 self.advance();
