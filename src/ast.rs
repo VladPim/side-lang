@@ -6,8 +6,20 @@ pub struct Program {
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
     pub body: Vec<Stmt>,
+}
+
+#[derive(Debug)]
+pub struct Param {
+    pub name: String,
+    pub param_type: Type,
+}
+
+#[derive(Debug)]
+pub enum Type {
+    Int,
+    Str,
 }
 
 #[derive(Debug)]
@@ -20,7 +32,7 @@ pub enum Stmt {
         name: String,
         value: Expr,
     },
-    IoPrint(Expr),
+    IoPrint(Vec<Expr>),
     If {
         condition: Expr,
         then_body: Vec<Stmt>,
@@ -33,6 +45,10 @@ pub enum Stmt {
     Return(Expr),
     Break,
     Continue,
+    CallStmt {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]
@@ -60,10 +76,11 @@ pub enum Expr {
 pub enum BinOp {
     Add, Sub, Mul, Div,
     Eq, NotEq, Less, Greater, LessEq, GreaterEq,
-    And, Or,          // логические
+    And, Or,
 }
 
 #[derive(Debug)]
 pub enum UnaryOp {
     Not,
+    Neg,
 }
