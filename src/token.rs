@@ -25,6 +25,8 @@ pub enum Token {
     #[token(r#")"#)]   RParen,
     #[token("{")]      LBrace,
     #[token("}")]      RBrace,
+    #[token("[")]      LBracket,
+    #[token("]")]      RBracket,
     #[token("=")]      Equals,
     #[token("==")]     EqualEqual,
     #[token("!=")]     NotEqual,
