@@ -15,6 +15,8 @@ pub enum Token {
     #[token("not")]      Not,
     #[token("break")]    Break,
     #[token("continue")] Continue,
+    #[token("int")]      Int,
+    #[token("str")]      Str,
 
     // Символы
     #[token(".")]      Dot,
