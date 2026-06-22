@@ -1,16 +1,37 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Program {
+    pub structs: Vec<StructDef>,
+    pub constants: Vec<Constant>,
     pub functions: Vec<Function>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct Constant {
+    pub name: String,
+    pub value: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<Field>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub name: String,
+    pub field_type: Type,
+}
+
+#[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
     pub params: Vec<Param>,
+    pub return_type: Type,
     pub body: Vec<Stmt>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
     pub param_type: Type,
@@ -19,15 +40,18 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Int,
+    Double,
     Str,
-    Array,          // динамический массив целых чисел
+    Array,
+    DoubleArray,
+    Struct(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Let {
         name: String,
-        var_type: Type,     // тип переменной
+        var_type: Option<Type>,
         value: Expr,
     },
     Assign {
@@ -49,6 +73,13 @@ pub enum Stmt {
         condition: Expr,
         body: Vec<Stmt>,
     },
+    For {
+        var_name: String,
+        start: Expr,
+        condition: Expr,
+        step: Expr,
+        body: Vec<Stmt>,
+    },
     Return(Expr),
     Break,
     Continue,
@@ -58,9 +89,10 @@ pub enum Stmt {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Number(i32),
+    DoubleLiteral(f64),
     StringLiteral(String),
     Variable(String),
     Input(String),
@@ -68,10 +100,18 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
-    ArrayLiteral(Vec<Expr>),        // может быть пустым
+    StructLiteral {
+        name: String,
+        fields: Vec<Expr>,
+    },
+    ArrayLiteral(Vec<Expr>),
     Index {
         array: Box<Expr>,
         index: Box<Expr>,
+    },
+    FieldAccess {
+        expr: Box<Expr>,
+        field: String,
     },
     Binary {
         left: Box<Expr>,
@@ -84,14 +124,14 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinOp {
     Add, Sub, Mul, Div,
     Eq, NotEq, Less, Greater, LessEq, GreaterEq,
     And, Or,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnaryOp {
     Not,
     Neg,
