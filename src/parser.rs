@@ -53,12 +53,18 @@ impl Parser {
         let mut params = vec![];
         if self.peek() != Some(&Token::RParen) {
             loop {
-                if let Some(Token::Identifier(p)) = self.peek().cloned() {
+                let param_type = match self.peek() {
+                    Some(Token::Int) => { self.advance(); Type::Int }
+                    Some(Token::Str) => { self.advance(); Type::Str }
+                    _ => Type::Int,
+                };
+                let param_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
                     self.advance();
-                    params.push(p);
+                    n
                 } else {
                     return Err("Expected parameter name".to_string());
-                }
+                };
+                params.push(Param { name: param_name, param_type });
                 if self.peek() == Some(&Token::Comma) {
                     self.advance();
                 } else {
@@ -114,15 +120,40 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected variable name for assignment".to_string());
+            return Err("Expected identifier".to_string());
         };
-        if self.peek() == Some(&Token::Equals) {
+
+        if self.peek() == Some(&Token::LParen) {
+            let args = self.parse_call_args()?;
+            if self.peek() != Some(&Token::Equals) {
+                return Ok(Stmt::CallStmt { name, args });
+            } else {
+                self.expect(Token::Equals)?;
+                let value = Expr::Call { name: name.clone(), args };
+                Ok(Stmt::Assign { name: name.clone(), value })
+            }
+        } else {
             self.expect(Token::Equals)?;
             let value = self.parse_expr()?;
             Ok(Stmt::Assign { name, value })
-        } else {
-            Err("Only assignment is allowed for identifiers in statement position".to_string())
         }
+    }
+
+    fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
+        self.expect(Token::LParen)?;
+        let mut args = vec![];
+        if self.peek() != Some(&Token::RParen) {
+            loop {
+                args.push(self.parse_expr()?);
+                if self.peek() == Some(&Token::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(Token::RParen)?;
+        Ok(args)
     }
 
     fn parse_if(&mut self) -> Result<Stmt, String> {
@@ -165,9 +196,19 @@ impl Parser {
         self.expect(Token::Dot)?;
         self.expect(Token::Print)?;
         self.expect(Token::LParen)?;
-        let expr = self.parse_expr()?;
+        let mut args = vec![];
+        if self.peek() != Some(&Token::RParen) {
+            loop {
+                args.push(self.parse_expr()?);
+                if self.peek() == Some(&Token::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
         self.expect(Token::RParen)?;
-        Ok(Stmt::IoPrint(expr))
+        Ok(Stmt::IoPrint(args))
     }
 
     // -------- Выражения ----------
@@ -175,37 +216,26 @@ impl Parser {
         self.parse_or()
     }
 
-    // or (низший приоритет)
     fn parse_or(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_and()?;
         while self.peek() == Some(&Token::Or) {
             self.advance();
             let right = self.parse_and()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op: BinOp::Or,
-                right: Box::new(right),
-            };
+            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right) };
         }
         Ok(left)
     }
 
-    // and
     fn parse_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_comparison()?;
         while self.peek() == Some(&Token::And) {
             self.advance();
             let right = self.parse_comparison()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op: BinOp::And,
-                right: Box::new(right),
-            };
+            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right) };
         }
         Ok(left)
     }
 
-    // сравнения
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_addition()?;
         while let Some(op) = self.peek() {
@@ -225,7 +255,6 @@ impl Parser {
         Ok(left)
     }
 
-    // сложение/вычитание
     fn parse_addition(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_multiplication()?;
         while let Some(op) = self.peek() {
@@ -246,7 +275,6 @@ impl Parser {
         Ok(left)
     }
 
-    // умножение/деление
     fn parse_multiplication(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_unary()?;
         while let Some(op) = self.peek() {
@@ -267,18 +295,20 @@ impl Parser {
         Ok(left)
     }
 
-    // унарный not
     fn parse_unary(&mut self) -> Result<Expr, String> {
         if self.peek() == Some(&Token::Not) {
             self.advance();
             let expr = self.parse_unary()?;
-            Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) })
-        } else {
-            self.parse_primary()
+            return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) });
         }
+        if self.peek() == Some(&Token::Minus) {
+            self.advance();
+            let expr = self.parse_unary()?;
+            return Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr) });
+        }
+        self.parse_primary()
     }
 
-    // атомарные элементы
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.peek().cloned() {
             Some(Token::Number(n)) => {
@@ -292,19 +322,7 @@ impl Parser {
             Some(Token::Identifier(name)) => {
                 self.advance();
                 if self.peek() == Some(&Token::LParen) {
-                    self.expect(Token::LParen)?;
-                    let mut args = vec![];
-                    if self.peek() != Some(&Token::RParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            if self.peek() == Some(&Token::Comma) {
-                                self.advance();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    self.expect(Token::RParen)?;
+                    let args = self.parse_call_args()?;
                     Ok(Expr::Call { name, args })
                 } else {
                     Ok(Expr::Variable(name))
