@@ -1,23 +1,36 @@
 use crate::ast::*;
 
-/// Генерирует C-код из AST
 pub fn generate(program: &Program) -> String {
     let mut out = String::new();
     out.push_str("#include <stdio.h>\n\n");
 
+    // Вспомогательная функция ввода
+    out.push_str("int side_input(const char* prompt) {\n");
+    out.push_str("    int val;\n");
+    out.push_str("    printf(\"%s\", prompt);\n");
+    out.push_str("    scanf(\"%d\", &val);\n");
+    out.push_str("    return val;\n");
+    out.push_str("}\n\n");
+
     for func in &program.functions {
         let c_name = if func.name == "main" {
-            // чтобы настоящая main вызывала нашу, переименуем в side_main
             "side_main".to_string()
         } else {
             format!("side_{}", func.name)
         };
-        out.push_str(&format!("int {}() {{\n", c_name));
+
+        let params_str = func.params.iter()
+            .map(|p| format!("int {}", p))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("int {}(", c_name));
+        out.push_str(&params_str);
+        out.push_str(") {\n");
+
         generate_stmts(&func.body, &mut out, 1);
         out.push_str("    return 0;\n}\n\n");
     }
 
-    // Добавляем настоящую точку входа
     out.push_str("int main() {\n");
     out.push_str("    return side_main();\n");
     out.push_str("}\n");
@@ -33,15 +46,18 @@ fn generate_stmts(stmts: &[Stmt], out: &mut String, indent: usize) {
                 generate_expr(value, out);
                 out.push_str(";\n");
             }
+            Stmt::Assign { name, value } => {
+                out.push_str(&format!("{}{} = ", pad, name));
+                generate_expr(value, out);
+                out.push_str(";\n");
+            }
             Stmt::IoPrint(expr) => {
                 match expr {
-                    // Если выражение – строковый литерал, выводим как "%s\n"
                     Expr::StringLiteral(_) => {
                         out.push_str(&format!("{}printf(\"%s\\n\", ", pad));
                         generate_expr(expr, out);
                         out.push_str(");\n");
                     }
-                    // Для всего остального (числа, переменные, бинарные) используем "%d\n"
                     _ => {
                         out.push_str(&format!("{}printf(\"%d\\n\", ", pad));
                         generate_expr(expr, out);
@@ -49,11 +65,7 @@ fn generate_stmts(stmts: &[Stmt], out: &mut String, indent: usize) {
                     }
                 }
             }
-            Stmt::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
+            Stmt::If { condition, then_body, else_body } => {
                 out.push_str(&format!("{}if (", pad));
                 generate_expr(condition, out);
                 out.push_str(") {\n");
@@ -65,6 +77,24 @@ fn generate_stmts(stmts: &[Stmt], out: &mut String, indent: usize) {
                     out.push_str(&format!("{}}}\n", pad));
                 }
             }
+            Stmt::While { condition, body } => {
+                out.push_str(&format!("{}while (", pad));
+                generate_expr(condition, out);
+                out.push_str(") {\n");
+                generate_stmts(body, out, indent + 1);
+                out.push_str(&format!("{}}}\n", pad));
+            }
+            Stmt::Return(expr) => {
+                out.push_str(&format!("{}return ", pad));
+                generate_expr(expr, out);
+                out.push_str(";\n");
+            }
+            Stmt::Break => {
+                out.push_str(&format!("{}break;\n", pad));
+            }
+            Stmt::Continue => {
+                out.push_str(&format!("{}continue;\n", pad));
+            }
         }
     }
 }
@@ -74,6 +104,16 @@ fn generate_expr(expr: &Expr, out: &mut String) {
         Expr::Number(n) => out.push_str(&n.to_string()),
         Expr::StringLiteral(s) => out.push_str(&format!("\"{}\"", s)),
         Expr::Variable(name) => out.push_str(name),
+        Expr::Input(prompt) => out.push_str(&format!("side_input(\"{}\")", prompt)),
+        Expr::Call { name, args } => {
+            let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
+            out.push_str(&format!("{}(", c_name));
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 { out.push_str(", "); }
+                generate_expr(arg, out);
+            }
+            out.push(')');
+        }
         Expr::Binary { left, op, right } => {
             out.push('(');
             generate_expr(left, out);
@@ -88,10 +128,21 @@ fn generate_expr(expr: &Expr, out: &mut String) {
                 BinOp::Greater => " > ",
                 BinOp::LessEq => " <= ",
                 BinOp::GreaterEq => " >= ",
+                BinOp::And => " && ",
+                BinOp::Or => " || ",
             };
             out.push_str(op_str);
             generate_expr(right, out);
             out.push(')');
+        }
+        Expr::Unary { op, expr } => {
+            match op {
+                UnaryOp::Not => {
+                    out.push_str("!(");
+                    generate_expr(expr, out);
+                    out.push(')');
+                }
+            }
         }
     }
 }
