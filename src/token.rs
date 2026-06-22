@@ -20,6 +20,7 @@ pub enum Token {
     #[token("double")]   Double,
     #[token("struct")]   Struct,
     #[token("->")]       Arrow,
+    #[token("import")]   Import,
 
     #[token(".")]      Dot,
     #[token(",")]      Comma,
