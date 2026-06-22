@@ -12,20 +12,32 @@ impl Parser {
     }
 
     pub fn parse_program(&mut self) -> Result<Program, String> {
-        let mut structs = vec![];
-        let mut constants = vec![];
-        let mut functions = vec![];
+    let mut imports = vec![];
+    let mut structs = vec![];
+    let mut constants = vec![];
+    let mut functions = vec![];
 
-        while self.peek().is_some() {
-            match self.peek() {
-                Some(Token::Struct) => structs.push(self.parse_struct_def()?),
-                Some(Token::Fn) => functions.push(self.parse_function()?),
-                Some(Token::Let) => constants.push(self.parse_constant()?),
-                other => return Err(format!("Unexpected top-level token: {:?}", other)),
-            }
+    while self.peek().is_some() {
+        match self.peek() {
+            Some(Token::Import) => imports.push(self.parse_import()?),
+            Some(Token::Struct) => structs.push(self.parse_struct_def()?),
+            Some(Token::Fn) => functions.push(self.parse_function()?),
+            Some(Token::Let) => constants.push(self.parse_constant()?),
+            other => return Err(format!("Unexpected top-level token: {:?}", other)),
         }
-        Ok(Program { structs, constants, functions })
     }
+    Ok(Program { imports, structs, constants, functions })
+}
+
+fn parse_import(&mut self) -> Result<String, String> {
+    self.expect(Token::Import)?;
+    if let Some(Token::StringLiteral(path)) = self.peek().cloned() {
+        self.advance();
+        Ok(path)
+    } else {
+        Err("Expected string literal after 'import'".to_string())
+    }
+}
 
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.pos).map(|(t, _)| t)
