@@ -40,6 +40,18 @@ impl Parser {
         format!("Error at {}:{}: {}", line, col, msg)
     }
 
+    fn current_span(&self) -> Span {
+        if self.pos >= self.tokens.len() {
+            return Span::new(0, 0);
+        }
+        let range = &self.tokens[self.pos].1;
+        Span::new(range.start, range.end)
+    }
+
+    fn span_from(&self, start: usize, end: usize) -> Span {
+        Span::new(start, end)
+    }
+
     pub fn parse_program(&mut self) -> Result<Program, String> {
         let mut imports = vec![];
         let mut structs = vec![];
@@ -48,10 +60,23 @@ impl Parser {
 
         while self.peek().is_some() {
             match self.peek() {
-                Some(Token::Import) => imports.push(self.parse_import()?),
-                Some(Token::Struct) => structs.push(self.parse_struct_def()?),
-                Some(Token::Fn) => functions.push(self.parse_function()?),
-                Some(Token::Let) => constants.push(self.parse_constant()?),
+                Some(Token::Import) => {
+                    let start = self.pos;
+                    let path = self.parse_import()?;
+                    imports.push(path);
+                }
+                Some(Token::Struct) => {
+                    let s = self.parse_struct_def()?;
+                    structs.push(s);
+                }
+                Some(Token::Fn) => {
+                    let f = self.parse_function()?;
+                    functions.push(f);
+                }
+                Some(Token::Let) => {
+                    let c = self.parse_constant()?;
+                    constants.push(c);
+                }
                 other => return Err(self.format_error(self.pos, &format!("Unexpected top-level token: {:?}", other))),
             }
         }
@@ -91,6 +116,7 @@ impl Parser {
 
     // -------- Константы ----------
     fn parse_constant(&mut self) -> Result<Constant, String> {
+        let start = self.pos;
         self.expect(Token::Let)?;
         let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
             self.advance();
@@ -100,11 +126,14 @@ impl Parser {
         };
         self.expect(Token::Equals)?;
         let value = self.parse_expr()?;
-        Ok(Constant { name, value })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Constant { name, value, span })
     }
 
     // -------- Структуры ----------
     fn parse_struct_def(&mut self) -> Result<StructDef, String> {
+        let start = self.pos;
         self.expect(Token::Struct)?;
         let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
             self.advance();
@@ -116,20 +145,24 @@ impl Parser {
         let mut fields = vec![];
         while self.peek() != Some(&Token::RBrace) {
             let field_type = self.parse_type()?;
+            let field_span = self.current_span();
             let field_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
                 self.advance();
                 n
             } else {
                 return Err(self.format_error(self.pos, "Expected field name"));
             };
-            fields.push(Field { name: field_name, field_type });
+            fields.push(Field { name: field_name, field_type, span: field_span });
         }
         self.expect(Token::RBrace)?;
-        Ok(StructDef { name, fields })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(StructDef { name, fields, span })
     }
 
     // -------- Функции ----------
     fn parse_function(&mut self) -> Result<Function, String> {
+        let start = self.pos;
         self.expect(Token::Fn)?;
 
         let mut return_type = match self.peek() {
@@ -173,6 +206,7 @@ impl Parser {
         let mut params = vec![];
         if self.peek() != Some(&Token::RParen) {
             loop {
+                let param_span = self.current_span();
                 let param_type = self.parse_type()?;
                 let param_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
                     self.advance();
@@ -180,7 +214,7 @@ impl Parser {
                 } else {
                     return Err(self.format_error(self.pos, "Expected parameter name"));
                 };
-                params.push(Param { name: param_name, param_type });
+                params.push(Param { name: param_name, param_type, span: param_span });
                 if self.peek() == Some(&Token::Comma) {
                     self.advance();
                 } else {
@@ -197,7 +231,9 @@ impl Parser {
 
         self.expect(Token::LBrace)?;
         let body = self.parse_block()?;
-        Ok(Function { name, params, return_type, body })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Function { name, params, return_type, body, span })
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
@@ -251,8 +287,16 @@ impl Parser {
             Some(Token::While) => self.parse_while(),
             Some(Token::For) => self.parse_for(),
             Some(Token::Return) => self.parse_return(),
-            Some(Token::Break) => { self.advance(); Ok(Stmt::Break) }
-            Some(Token::Continue) => { self.advance(); Ok(Stmt::Continue) }
+            Some(Token::Break) => {
+                let span = self.current_span();
+                self.advance();
+                Ok(Stmt::Break(span))
+            }
+            Some(Token::Continue) => {
+                let span = self.current_span();
+                self.advance();
+                Ok(Stmt::Continue(span))
+            }
             Some(Token::Io) => self.parse_io_print(),
             Some(Token::Identifier(_)) => self.parse_assign_or_call_stmt(),
             other => Err(self.format_error(self.pos, &format!("Unexpected token at statement start: {:?}", other))),
@@ -260,6 +304,7 @@ impl Parser {
     }
 
     fn parse_let(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
         self.expect(Token::Let)?;
 
         let first = self.peek().cloned();
@@ -309,12 +354,16 @@ impl Parser {
                     };
                     self.expect(Token::Equals)?;
                     let value = self.parse_expr()?;
-                    return Ok(Stmt::Let { name: var_name, var_type: Some(Type::Struct(type_name)), value });
+                    let end = self.pos - 1;
+                    let span = self.span_from(start, end);
+                    return Ok(Stmt::Let { name: var_name, var_type: Some(Type::Struct(type_name)), value, span });
                 } else {
                     let var_name = name1.clone();
                     self.expect(Token::Equals)?;
                     let value = self.parse_expr()?;
-                    return Ok(Stmt::Let { name: var_name, var_type: None, value });
+                    let end = self.pos - 1;
+                    let span = self.span_from(start, end);
+                    return Ok(Stmt::Let { name: var_name, var_type: None, value, span });
                 }
             }
             _ => None,
@@ -329,68 +378,80 @@ impl Parser {
 
         self.expect(Token::Equals)?;
         let value = self.parse_expr()?;
-        Ok(Stmt::Let { name, var_type, value })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Stmt::Let { name, var_type, value, span })
     }
 
-fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
-    let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-        self.advance();
-        n
-    } else {
-        return Err(self.format_error(self.pos, "Expected identifier"));
-    };
-
-    // Индексированное присваивание
-    if self.peek() == Some(&Token::LBracket) {
-        self.expect(Token::LBracket)?;
-        let index = self.parse_expr()?;
-        self.expect(Token::RBracket)?;
-        self.expect(Token::Equals)?;
-        let value = self.parse_expr()?;
-        return Ok(Stmt::AssignIndex { name, index, value });
-    }
-
-    // Вызов функции
-    if self.peek() == Some(&Token::LParen) {
-        let args = self.parse_call_args()?;
-        // Если после вызова идёт '=', то это присваивание результата вызова
-        if self.peek() == Some(&Token::Equals) {
-            self.expect(Token::Equals)?;
-            let value = Expr::Call { name: name.clone(), args };
-            Ok(Stmt::Assign { name: name.clone(), value })
+    fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
+        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
+            self.advance();
+            n
         } else {
-            Ok(Stmt::CallStmt { name, args })
-        }
-    } else {
-        // Проверяем составные операторы
-        let op = match self.peek() {
-            Some(Token::PlusEquals) => Some(BinOp::Add),
-            Some(Token::MinusEquals) => Some(BinOp::Sub),
-            Some(Token::StarEquals) => Some(BinOp::Mul),
-            Some(Token::SlashEquals) => Some(BinOp::Div),
-            _ => None,
+            return Err(self.format_error(self.pos, "Expected identifier"));
         };
 
-        if let Some(bin_op) = op {
-            self.advance(); // съедаем +=, -=, etc.
-            let rhs = self.parse_expr()?;
-            // Строим выражение: name = name op rhs
-            let left = Expr::Variable(name.clone());
-            let right = rhs;
-            let value = Expr::Binary {
-                left: Box::new(left),
-                op: bin_op,
-                right: Box::new(right),
-            };
-            Ok(Stmt::Assign { name, value })
-        } else {
-            // Обычное присваивание
+        // Индексированное присваивание
+        if self.peek() == Some(&Token::LBracket) {
+            self.expect(Token::LBracket)?;
+            let index = self.parse_expr()?;
+            self.expect(Token::RBracket)?;
             self.expect(Token::Equals)?;
             let value = self.parse_expr()?;
-            Ok(Stmt::Assign { name, value })
+            let end = self.pos - 1;
+            let span = self.span_from(start, end);
+            return Ok(Stmt::AssignIndex { name, index, value, span });
+        }
+
+        // Вызов функции
+        if self.peek() == Some(&Token::LParen) {
+            let args = self.parse_call_args()?;
+            if self.peek() == Some(&Token::Equals) {
+                self.expect(Token::Equals)?;
+                let value = Expr::Call { name: name.clone(), args, span: self.current_span() };
+                let end = self.pos - 1;
+                let span = self.span_from(start, end);
+                Ok(Stmt::Assign { name: name.clone(), value, span })
+            } else {
+                let end = self.pos - 1;
+                let span = self.span_from(start, end);
+                Ok(Stmt::CallStmt { name, args, span })
+            }
+        } else {
+            // Проверяем составные операторы
+            let op = match self.peek() {
+                Some(Token::PlusEquals) => Some(BinOp::Add),
+                Some(Token::MinusEquals) => Some(BinOp::Sub),
+                Some(Token::StarEquals) => Some(BinOp::Mul),
+                Some(Token::SlashEquals) => Some(BinOp::Div),
+                _ => None,
+            };
+
+            if let Some(bin_op) = op {
+                self.advance(); // съедаем +=, -=, etc.
+                let rhs = self.parse_expr()?;
+                let left = Expr::Variable(name.clone(), self.current_span());
+                let right = rhs;
+                let binary_span = left.span().merge(&right.span());
+                let value = Expr::Binary {
+                    left: Box::new(left),
+                    op: bin_op,
+                    right: Box::new(right),
+                    span: binary_span,
+                };
+                let end = self.pos - 1;
+                let span = self.span_from(start, end);
+                Ok(Stmt::Assign { name, value, span })
+            } else {
+                self.expect(Token::Equals)?;
+                let value = self.parse_expr()?;
+                let end = self.pos - 1;
+                let span = self.span_from(start, end);
+                Ok(Stmt::Assign { name, value, span })
+            }
         }
     }
-}
 
     fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
         self.expect(Token::LParen)?;
@@ -410,6 +471,7 @@ fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
     }
 
     fn parse_if(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
         self.expect(Token::If)?;
         let condition = self.parse_expr()?;
         self.expect(Token::LBrace)?;
@@ -427,18 +489,24 @@ fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
         } else {
             None
         };
-        Ok(Stmt::If { condition, then_body, else_body })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Stmt::If { condition, then_body, else_body, span })
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
         self.expect(Token::While)?;
         let condition = self.parse_expr()?;
         self.expect(Token::LBrace)?;
         let body = self.parse_block()?;
-        Ok(Stmt::While { condition, body })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Stmt::While { condition, body, span })
     }
 
     fn parse_for(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
         self.expect(Token::For)?;
         let var_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
             self.advance();
@@ -447,7 +515,7 @@ fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
             return Err(self.format_error(self.pos, "Expected loop variable name in 'for'"));
         };
         self.expect(Token::Equals)?;
-        let start = self.parse_expr()?;
+        let start_expr = self.parse_expr()?;
         self.expect(Token::Comma)?;
         let condition = self.parse_expr()?;
         self.expect(Token::Comma)?;
@@ -459,19 +527,25 @@ fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
         };
         self.expect(Token::Equals)?;
         let step_value = self.parse_expr()?;
-        let _step = Stmt::Assign { name: step_var.clone(), value: step_value.clone() };
+        let _step = Stmt::Assign { name: step_var.clone(), value: step_value.clone(), span: self.current_span() };
         self.expect(Token::LBrace)?;
         let body = self.parse_block()?;
-        Ok(Stmt::For { var_name, start, condition, step: step_value, body })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Stmt::For { var_name, start: start_expr, condition, step: step_value, body, span })
     }
 
     fn parse_return(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
         self.expect(Token::Return)?;
         let expr = self.parse_expr()?;
-        Ok(Stmt::Return(expr))
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Stmt::Return(expr, span))
     }
 
     fn parse_io_print(&mut self) -> Result<Stmt, String> {
+        let start = self.pos;
         self.expect(Token::Io)?;
         self.expect(Token::Dot)?;
         self.expect(Token::Print)?;
@@ -488,7 +562,9 @@ fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
             }
         }
         self.expect(Token::RParen)?;
-        Ok(Stmt::IoPrint(args))
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Stmt::IoPrint(args, span))
     }
 
     // -------- Выражения ----------
@@ -497,57 +573,66 @@ fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
     }
 
     fn parse_or(&mut self) -> Result<Expr, String> {
+        let start = self.pos;
         let mut left = self.parse_and()?;
         while self.peek() == Some(&Token::Or) {
             self.advance();
             let right = self.parse_and()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right) };
+            let span = left.span().merge(&right.span());
+            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right), span };
         }
         Ok(left)
     }
 
     fn parse_and(&mut self) -> Result<Expr, String> {
+        let start = self.pos;
         let mut left = self.parse_comparison()?;
         while self.peek() == Some(&Token::And) {
             self.advance();
             let right = self.parse_comparison()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right) };
+            let span = left.span().merge(&right.span());
+            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right), span };
         }
         Ok(left)
     }
 
-fn parse_comparison(&mut self) -> Result<Expr, String> {
-    let mut left = self.parse_addition()?;
-    while let Some(op) = self.peek() {
-        let binop = match op {
-            Token::EqualEqual => BinOp::Eq,
-            Token::NotEqual => BinOp::NotEq,
-            Token::Less => BinOp::Less,
-            Token::Greater => BinOp::Greater,
-            Token::LessEqual => BinOp::LessEq,
-            Token::GreaterEq => BinOp::GreaterEq,  // <-- было GreaterEqual
-            _ => break,
-        };
-        self.advance();
-        let right = self.parse_addition()?;
-        left = Expr::Binary { left: Box::new(left), op: binop, right: Box::new(right) };
+    fn parse_comparison(&mut self) -> Result<Expr, String> {
+        let start = self.pos;
+        let mut left = self.parse_addition()?;
+        while let Some(op) = self.peek() {
+            let binop = match op {
+                Token::EqualEqual => BinOp::Eq,
+                Token::NotEqual => BinOp::NotEq,
+                Token::Less => BinOp::Less,
+                Token::Greater => BinOp::Greater,
+                Token::LessEqual => BinOp::LessEq,
+                Token::GreaterEq => BinOp::GreaterEq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_addition()?;
+            let span = left.span().merge(&right.span());
+            left = Expr::Binary { left: Box::new(left), op: binop, right: Box::new(right), span };
+        }
+        Ok(left)
     }
-    Ok(left)
-}
 
     fn parse_addition(&mut self) -> Result<Expr, String> {
+        let start = self.pos;
         let mut left = self.parse_multiplication()?;
         while let Some(op) = self.peek() {
             match op {
                 Token::Plus => {
                     self.advance();
                     let right = self.parse_multiplication()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Add, right: Box::new(right) };
+                    let span = left.span().merge(&right.span());
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Add, right: Box::new(right), span };
                 }
                 Token::Minus => {
                     self.advance();
                     let right = self.parse_multiplication()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Sub, right: Box::new(right) };
+                    let span = left.span().merge(&right.span());
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Sub, right: Box::new(right), span };
                 }
                 _ => break,
             }
@@ -556,18 +641,21 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
     }
 
     fn parse_multiplication(&mut self) -> Result<Expr, String> {
+        let start = self.pos;
         let mut left = self.parse_unary()?;
         while let Some(op) = self.peek() {
             match op {
                 Token::Star => {
                     self.advance();
                     let right = self.parse_unary()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Mul, right: Box::new(right) };
+                    let span = left.span().merge(&right.span());
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Mul, right: Box::new(right), span };
                 }
                 Token::Slash => {
                     self.advance();
                     let right = self.parse_unary()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Div, right: Box::new(right) };
+                    let span = left.span().merge(&right.span());
+                    left = Expr::Binary { left: Box::new(left), op: BinOp::Div, right: Box::new(right), span };
                 }
                 _ => break,
             }
@@ -576,15 +664,18 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
     }
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
+        let start = self.pos;
         if self.peek() == Some(&Token::Not) {
             self.advance();
             let expr = self.parse_unary()?;
-            return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) });
+            let span = self.current_span().merge(&expr.span());
+            return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr), span });
         }
         if self.peek() == Some(&Token::Minus) {
             self.advance();
             let expr = self.parse_unary()?;
-            return Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr) });
+            let span = self.current_span().merge(&expr.span());
+            return Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr), span });
         }
         self.parse_postfix()
     }
@@ -594,12 +685,15 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
         loop {
             match self.peek() {
                 Some(Token::LBracket) => {
+                    let start = self.pos;
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(Token::RBracket)?;
-                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
+                    let span = expr.span().merge(&index.span());
+                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index), span };
                 }
                 Some(Token::Dot) => {
+                    let start = self.pos;
                     self.advance();
                     let field = if let Some(Token::Identifier(f)) = self.peek().cloned() {
                         self.advance();
@@ -607,7 +701,8 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
                     } else {
                         return Err(self.format_error(self.pos, "Expected field name after '.'"));
                     };
-                    expr = Expr::FieldAccess { expr: Box::new(expr), field };
+                    let span = expr.span().merge(&self.current_span());
+                    expr = Expr::FieldAccess { expr: Box::new(expr), field, span };
                 }
                 _ => break,
             }
@@ -616,12 +711,12 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
     }
 
     fn parse_struct_literal(&mut self, name: String) -> Result<Expr, String> {
+        let start = self.pos;
         self.expect(Token::LBrace)?;
         let mut fields = vec![];
         if self.peek() != Some(&Token::RBrace) {
             loop {
-                let field_expr = self.parse_expr()?;
-                fields.push(field_expr);
+                fields.push(self.parse_expr()?);
                 if self.peek() == Some(&Token::Comma) {
                     self.advance();
                 } else {
@@ -630,26 +725,43 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
             }
         }
         self.expect(Token::RBrace)?;
-        Ok(Expr::StructLiteral { name, fields })
+        let end = self.pos - 1;
+        let span = self.span_from(start, end);
+        Ok(Expr::StructLiteral { name, fields, span })
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.peek().cloned() {
-            Some(Token::Number(n)) => { self.advance(); Ok(Expr::Number(n)) }
-            Some(Token::DoubleLiteral(d)) => { self.advance(); Ok(Expr::DoubleLiteral(d)) }
-            Some(Token::StringLiteral(s)) => { self.advance(); Ok(Expr::StringLiteral(s)) }
+            Some(Token::Number(n)) => {
+                let span = self.current_span();
+                self.advance();
+                Ok(Expr::Number(n, span))
+            }
+            Some(Token::DoubleLiteral(d)) => {
+                let span = self.current_span();
+                self.advance();
+                Ok(Expr::DoubleLiteral(d, span))
+            }
+            Some(Token::StringLiteral(s)) => {
+                let span = self.current_span();
+                self.advance();
+                Ok(Expr::StringLiteral(s, span))
+            }
             Some(Token::Identifier(name)) => {
+                let span = self.current_span();
                 self.advance();
                 if self.peek() == Some(&Token::LParen) {
                     let args = self.parse_call_args()?;
-                    Ok(Expr::Call { name, args })
+                    let call_span = span.merge(&self.current_span());
+                    Ok(Expr::Call { name, args, span: call_span })
                 } else if self.peek() == Some(&Token::LBrace) {
                     self.parse_struct_literal(name)
                 } else {
-                    Ok(Expr::Variable(name))
+                    Ok(Expr::Variable(name, span))
                 }
             }
             Some(Token::LBracket) => {
+                let start = self.pos;
                 self.advance();
                 let mut elements = vec![];
                 if self.peek() != Some(&Token::RBracket) {
@@ -663,9 +775,12 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
                     }
                 }
                 self.expect(Token::RBracket)?;
-                Ok(Expr::ArrayLiteral(elements))
+                let end = self.pos - 1;
+                let span = self.span_from(start, end);
+                Ok(Expr::ArrayLiteral(elements, span))
             }
             Some(Token::Io) => {
+                let start = self.pos;
                 self.advance();
                 self.expect(Token::Dot)?;
                 self.expect(Token::Input)?;
@@ -677,14 +792,18 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
                     return Err(self.format_error(self.pos, "Expected prompt string for io.input"));
                 };
                 self.expect(Token::RParen)?;
-                Ok(Expr::Input(prompt))
+                let end = self.pos - 1;
+                let span = self.span_from(start, end);
+                Ok(Expr::Input(prompt, span))
             }
             Some(Token::Str) | Some(Token::Int) => {
                 let name = if matches!(self.peek(), Some(Token::Str)) { "str".to_string() } else { "int".to_string() };
+                let span = self.current_span();
                 self.advance();
                 if self.peek() == Some(&Token::LParen) {
                     let args = self.parse_call_args()?;
-                    Ok(Expr::Call { name, args })
+                    let call_span = span.merge(&self.current_span());
+                    Ok(Expr::Call { name, args, span: call_span })
                 } else {
                     Err(self.format_error(self.pos, &format!("Expected '(' after '{}'", name)))
                 }
@@ -696,6 +815,26 @@ fn parse_comparison(&mut self) -> Result<Expr, String> {
                 Ok(expr)
             }
             other => Err(self.format_error(self.pos, &format!("Unexpected token in expression: {:?}", other))),
+        }
+    }
+}
+
+// Добавляем метод span() для Expr
+impl Expr {
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Number(_, span) => *span,
+            Expr::DoubleLiteral(_, span) => *span,
+            Expr::StringLiteral(_, span) => *span,
+            Expr::Variable(_, span) => *span,
+            Expr::Input(_, span) => *span,
+            Expr::Call { span, .. } => *span,
+            Expr::StructLiteral { span, .. } => *span,
+            Expr::ArrayLiteral(_, span) => *span,
+            Expr::Index { span, .. } => *span,
+            Expr::FieldAccess { span, .. } => *span,
+            Expr::Binary { span, .. } => *span,
+            Expr::Unary { span, .. } => *span,
         }
     }
 }
