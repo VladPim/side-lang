@@ -332,38 +332,65 @@ impl Parser {
         Ok(Stmt::Let { name, var_type, value })
     }
 
-    fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
+fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
+    let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
+        self.advance();
+        n
+    } else {
+        return Err(self.format_error(self.pos, "Expected identifier"));
+    };
+
+    // Индексированное присваивание
+    if self.peek() == Some(&Token::LBracket) {
+        self.expect(Token::LBracket)?;
+        let index = self.parse_expr()?;
+        self.expect(Token::RBracket)?;
+        self.expect(Token::Equals)?;
+        let value = self.parse_expr()?;
+        return Ok(Stmt::AssignIndex { name, index, value });
+    }
+
+    // Вызов функции
+    if self.peek() == Some(&Token::LParen) {
+        let args = self.parse_call_args()?;
+        // Если после вызова идёт '=', то это присваивание результата вызова
+        if self.peek() == Some(&Token::Equals) {
+            self.expect(Token::Equals)?;
+            let value = Expr::Call { name: name.clone(), args };
+            Ok(Stmt::Assign { name: name.clone(), value })
         } else {
-            return Err(self.format_error(self.pos, "Expected identifier"));
+            Ok(Stmt::CallStmt { name, args })
+        }
+    } else {
+        // Проверяем составные операторы
+        let op = match self.peek() {
+            Some(Token::PlusEquals) => Some(BinOp::Add),
+            Some(Token::MinusEquals) => Some(BinOp::Sub),
+            Some(Token::StarEquals) => Some(BinOp::Mul),
+            Some(Token::SlashEquals) => Some(BinOp::Div),
+            _ => None,
         };
 
-        if self.peek() == Some(&Token::LBracket) {
-            self.expect(Token::LBracket)?;
-            let index = self.parse_expr()?;
-            self.expect(Token::RBracket)?;
-            self.expect(Token::Equals)?;
-            let value = self.parse_expr()?;
-            return Ok(Stmt::AssignIndex { name, index, value });
-        }
-
-        if self.peek() == Some(&Token::LParen) {
-            let args = self.parse_call_args()?;
-            if self.peek() == Some(&Token::Equals) {
-                self.expect(Token::Equals)?;
-                let value = Expr::Call { name: name.clone(), args };
-                Ok(Stmt::Assign { name: name.clone(), value })
-            } else {
-                Ok(Stmt::CallStmt { name, args })
-            }
+        if let Some(bin_op) = op {
+            self.advance(); // съедаем +=, -=, etc.
+            let rhs = self.parse_expr()?;
+            // Строим выражение: name = name op rhs
+            let left = Expr::Variable(name.clone());
+            let right = rhs;
+            let value = Expr::Binary {
+                left: Box::new(left),
+                op: bin_op,
+                right: Box::new(right),
+            };
+            Ok(Stmt::Assign { name, value })
         } else {
+            // Обычное присваивание
             self.expect(Token::Equals)?;
             let value = self.parse_expr()?;
             Ok(Stmt::Assign { name, value })
         }
     }
+}
 
     fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
         self.expect(Token::LParen)?;
@@ -489,24 +516,24 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_addition()?;
-        while let Some(op) = self.peek() {
-            let binop = match op {
-                Token::EqualEqual => BinOp::Eq,
-                Token::NotEqual => BinOp::NotEq,
-                Token::Less => BinOp::Less,
-                Token::Greater => BinOp::Greater,
-                Token::LessEqual => BinOp::LessEq,
-                Token::GreaterEqual => BinOp::GreaterEq,
-                _ => break,
-            };
-            self.advance();
-            let right = self.parse_addition()?;
-            left = Expr::Binary { left: Box::new(left), op: binop, right: Box::new(right) };
-        }
-        Ok(left)
+fn parse_comparison(&mut self) -> Result<Expr, String> {
+    let mut left = self.parse_addition()?;
+    while let Some(op) = self.peek() {
+        let binop = match op {
+            Token::EqualEqual => BinOp::Eq,
+            Token::NotEqual => BinOp::NotEq,
+            Token::Less => BinOp::Less,
+            Token::Greater => BinOp::Greater,
+            Token::LessEqual => BinOp::LessEq,
+            Token::GreaterEq => BinOp::GreaterEq,  // <-- было GreaterEqual
+            _ => break,
+        };
+        self.advance();
+        let right = self.parse_addition()?;
+        left = Expr::Binary { left: Box::new(left), op: binop, right: Box::new(right) };
     }
+    Ok(left)
+}
 
     fn parse_addition(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_multiplication()?;
