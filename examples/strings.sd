@@ -1,0 +1,11 @@
+fn main() {
+    let str a = "Hello"
+    let str b = "World"
+    let str c = a + " " + b
+    io.print("Concatenated: ", c)
+    if c == "Hello World" {
+        io.print("Equality test: OK")
+    } else {
+        io.print("Equality test: FAILED")
+    }
+}
