@@ -4,11 +4,40 @@ use crate::token::Token;
 pub struct Parser {
     tokens: Vec<(Token, std::ops::Range<usize>)>,
     pos: usize,
+    source: String,
 }
 
 impl Parser {
-    pub fn new(tokens: Vec<(Token, std::ops::Range<usize>)>) -> Self {
-        Self { tokens, pos: 0 }
+    pub fn new(tokens: Vec<(Token, std::ops::Range<usize>)>, source: String) -> Self {
+        Self { tokens, pos: 0, source }
+    }
+
+    fn location(&self, pos: usize) -> (usize, usize) {
+        if pos >= self.tokens.len() {
+            return (0, 0);
+        }
+        let range = &self.tokens[pos].1;
+        let start = range.start;
+        let source = &self.source;
+        let mut line = 1;
+        let mut col = 1;
+        for (i, ch) in source.chars().enumerate() {
+            if i == start {
+                break;
+            }
+            if ch == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    fn format_error(&self, pos: usize, msg: &str) -> String {
+        let (line, col) = self.location(pos);
+        format!("Error at {}:{}: {}", line, col, msg)
     }
 
     pub fn parse_program(&mut self) -> Result<Program, String> {
@@ -23,7 +52,7 @@ impl Parser {
                 Some(Token::Struct) => structs.push(self.parse_struct_def()?),
                 Some(Token::Fn) => functions.push(self.parse_function()?),
                 Some(Token::Let) => constants.push(self.parse_constant()?),
-                other => return Err(format!("Unexpected top-level token: {:?}", other)),
+                other => return Err(self.format_error(self.pos, &format!("Unexpected top-level token: {:?}", other))),
             }
         }
         Ok(Program { imports, structs, constants, functions })
@@ -35,7 +64,7 @@ impl Parser {
             self.advance();
             Ok(path)
         } else {
-            Err("Expected string literal after 'import'".to_string())
+            Err(self.format_error(self.pos, "Expected string literal after 'import'"))
         }
     }
 
@@ -52,12 +81,11 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
-            Err(format!(
-                "Syntax error: expected {:?}, got {:?} at pos {}",
+            Err(self.format_error(self.pos, &format!(
+                "Syntax error: expected {:?}, got {:?}",
                 expected,
-                self.peek(),
-                self.pos
-            ))
+                self.peek()
+            )))
         }
     }
 
@@ -68,7 +96,7 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected constant name after 'let'".to_string());
+            return Err(self.format_error(self.pos, "Expected constant name after 'let'"));
         };
         self.expect(Token::Equals)?;
         let value = self.parse_expr()?;
@@ -82,7 +110,7 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected struct name".to_string());
+            return Err(self.format_error(self.pos, "Expected struct name"));
         };
         self.expect(Token::LBrace)?;
         let mut fields = vec![];
@@ -92,7 +120,7 @@ impl Parser {
                 self.advance();
                 n
             } else {
-                return Err("Expected field name".to_string());
+                return Err(self.format_error(self.pos, "Expected field name"));
             };
             fields.push(Field { name: field_name, field_type });
         }
@@ -114,7 +142,7 @@ impl Parser {
                     self.advance();
                     n
                 } else {
-                    return Err("Expected identifier after 'fn'".to_string());
+                    return Err(self.format_error(self.pos, "Expected identifier after 'fn'"));
                 };
                 if self.peek() == Some(&Token::LParen) {
                     self.pos = save_pos;
@@ -123,7 +151,7 @@ impl Parser {
                     if matches!(self.peek(), Some(Token::Identifier(_))) {
                         Type::Struct(ident)
                     } else {
-                        return Err("Expected function name after return type".to_string());
+                        return Err(self.format_error(self.pos, "Expected function name after return type"));
                     }
                 }
             }
@@ -131,14 +159,14 @@ impl Parser {
         };
 
         if return_type == Type::Array || return_type == Type::DoubleArray {
-            return Err("Array return type not supported".to_string());
+            return Err(self.format_error(self.pos, "Array return type not supported"));
         }
 
         let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
             self.advance();
             n
         } else {
-            return Err("Expected function name".to_string());
+            return Err(self.format_error(self.pos, "Expected function name"));
         };
 
         self.expect(Token::LParen)?;
@@ -150,7 +178,7 @@ impl Parser {
                     self.advance();
                     n
                 } else {
-                    return Err("Expected parameter name".to_string());
+                    return Err(self.format_error(self.pos, "Expected parameter name"));
                 };
                 params.push(Param { name: param_name, param_type });
                 if self.peek() == Some(&Token::Comma) {
@@ -227,7 +255,7 @@ impl Parser {
             Some(Token::Continue) => { self.advance(); Ok(Stmt::Continue) }
             Some(Token::Io) => self.parse_io_print(),
             Some(Token::Identifier(_)) => self.parse_assign_or_call_stmt(),
-            other => Err(format!("Unexpected token at statement start: {:?}", other)),
+            other => Err(self.format_error(self.pos, &format!("Unexpected token at statement start: {:?}", other))),
         }
     }
 
@@ -268,7 +296,7 @@ impl Parser {
                     Some(Token::Equals) => false,
                     _ => {
                         self.pos = save_pos;
-                        return Err("Expected variable name or type".to_string());
+                        return Err(self.format_error(self.pos, "Expected variable name or type"));
                     }
                 };
                 if is_type {
@@ -277,7 +305,7 @@ impl Parser {
                         self.advance();
                         n
                     } else {
-                        return Err("Expected variable name after type".to_string());
+                        return Err(self.format_error(self.pos, "Expected variable name after type"));
                     };
                     self.expect(Token::Equals)?;
                     let value = self.parse_expr()?;
@@ -296,7 +324,7 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected variable name after 'let'".to_string());
+            return Err(self.format_error(self.pos, "Expected variable name after 'let'"));
         };
 
         self.expect(Token::Equals)?;
@@ -309,7 +337,7 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected identifier".to_string());
+            return Err(self.format_error(self.pos, "Expected identifier"));
         };
 
         if self.peek() == Some(&Token::LBracket) {
@@ -389,7 +417,7 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected loop variable name in 'for'".to_string());
+            return Err(self.format_error(self.pos, "Expected loop variable name in 'for'"));
         };
         self.expect(Token::Equals)?;
         let start = self.parse_expr()?;
@@ -400,7 +428,7 @@ impl Parser {
             self.advance();
             n
         } else {
-            return Err("Expected step variable in for".to_string());
+            return Err(self.format_error(self.pos, "Expected step variable in for"));
         };
         self.expect(Token::Equals)?;
         let step_value = self.parse_expr()?;
@@ -550,7 +578,7 @@ impl Parser {
                         self.advance();
                         f
                     } else {
-                        return Err("Expected field name after '.'".to_string());
+                        return Err(self.format_error(self.pos, "Expected field name after '.'"));
                     };
                     expr = Expr::FieldAccess { expr: Box::new(expr), field };
                 }
@@ -619,7 +647,7 @@ impl Parser {
                     self.advance();
                     s
                 } else {
-                    return Err("Expected prompt string for io.input".to_string());
+                    return Err(self.format_error(self.pos, "Expected prompt string for io.input"));
                 };
                 self.expect(Token::RParen)?;
                 Ok(Expr::Input(prompt))
@@ -631,7 +659,7 @@ impl Parser {
                     let args = self.parse_call_args()?;
                     Ok(Expr::Call { name, args })
                 } else {
-                    Err(format!("Expected '(' after '{}'", name))
+                    Err(self.format_error(self.pos, &format!("Expected '(' after '{}'", name)))
                 }
             }
             Some(Token::LParen) => {
@@ -640,7 +668,7 @@ impl Parser {
                 self.expect(Token::RParen)?;
                 Ok(expr)
             }
-            other => Err(format!("Unexpected token in expression: {:?}", other)),
+            other => Err(self.format_error(self.pos, &format!("Unexpected token in expression: {:?}", other))),
         }
     }
 }
