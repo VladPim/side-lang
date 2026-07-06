@@ -29,7 +29,6 @@ fn main() {
         std::process::exit(1);
     }
 
-    // 👇 Передаём source в парсер
     let mut parser = parser::Parser::new(tokens, source.clone());
     let mut program = parser.parse_program().unwrap_or_else(|e| {
         eprintln!("Parse error: {}", e);
@@ -48,19 +47,23 @@ fn main() {
             std::process::exit(1);
         });
 
-    let c_code = codegen::generate(&program).unwrap_or_else(|e| {
+    // Получаем имя файла без расширения для генерации C-файла
+    let path = Path::new(source_path);
+    let stem = path.file_stem().unwrap().to_str().unwrap();
+    let c_path = format!("{}.sd_generated.c", stem);
+
+    let c_code = codegen::generate(&program, source.clone(), source_path).unwrap_or_else(|e| {
         eprintln!("Compilation error: {}", e);
         std::process::exit(1);
     });
 
     println!("Generated C code:\n{}", c_code);
 
-    let c_path = "temp_output.c";
-    fs::write(c_path, &c_code).expect("Could not write C file");
+    fs::write(&c_path, &c_code).expect("Could not write C file");
 
     let output_name = if cfg!(windows) { "hello.exe" } else { "hello" };
     let status = Command::new("gcc")
-        .args(&[c_path, "-o", output_name, "-lm"])
+        .args(&[&c_path, "-o", output_name, "-lm"])
         .status()
         .expect("Failed to run gcc. Is GCC installed and in PATH?");
 
@@ -94,7 +97,6 @@ fn process_imports(
             return Err(format!("Lexical error in import '{}'", import_path));
         }
 
-        // 👇 Передаём source в парсер для импорта
         let mut parser = parser::Parser::new(tokens, source.clone());
         let mut imported = parser.parse_program()
             .map_err(|e| format!("Parse error in import '{}': {}", import_path, e))?;
