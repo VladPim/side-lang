@@ -162,6 +162,7 @@ fn generate_stmts(
                 }
                 scope.declare(name, final_type);
             }
+            // Остальные варианты Stmt остаются без изменений
             Stmt::Assign { name, value } => {
                 let var_type = scope.get(name)
                     .ok_or(format!("Variable '{}' not declared in this scope", name))?;
