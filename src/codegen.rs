@@ -77,7 +77,7 @@ pub fn generate(program: &Program, source: String) -> Result<String, String> {
         out.push_str(&format!("}} side_{};\n\n", s.name));
     }
 
-    // Встроенные функции (обновлённые с side_str_concat)
+    // Встроенные функции
     out.push_str(r#"
 void side_arr_push(int** arr, int* size, int* cap, int value) {
     if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(int)); }
@@ -509,11 +509,9 @@ fn generate_expr(
             out.push_str(field);
         }
         Expr::Binary { left, op, right, span } => {
-            // Получаем типы операндов
             let tl = infer_type(left, scope, functions, None, src_info, span)?;
             let tr = infer_type(right, scope, functions, None, src_info, span)?;
 
-            // Строковые операции (проверяем, что оба операнда – строки)
             if tl == Type::Str && tr == Type::Str {
                 match op {
                     BinOp::Add => {
@@ -542,12 +540,10 @@ fn generate_expr(
                 return Ok(());
             }
 
-            // Если один из операндов строка, а другой нет – ошибка
             if tl == Type::Str || tr == Type::Str {
                 return Err(src_info.format_error(span, "String operations only allowed with +, ==, !="));
             }
 
-            // Числовые операции
             out.push('(');
             generate_expr(left, out, scope, functions, src_info)?;
             let op_str = match op {
@@ -581,6 +577,15 @@ fn generate_expr(
                     out.push(')');
                 }
             }
+        }
+        Expr::Ternary { condition, then_expr, else_expr, span: _ } => {
+            out.push_str("(");
+            generate_expr(condition, out, scope, functions, src_info)?;
+            out.push_str(" ? ");
+            generate_expr(then_expr, out, scope, functions, src_info)?;
+            out.push_str(" : ");
+            generate_expr(else_expr, out, scope, functions, src_info)?;
+            out.push_str(")");
         }
     }
     Ok(())
@@ -672,29 +677,47 @@ fn infer_type(
             }
         }
         Expr::FieldAccess { expr: _, field: _, span: _ } => {
-            // Пока считаем, что поля всегда типа Int (можно доработать)
             Ok(Type::Int)
         }
         Expr::Binary { left, op, right, span: bin_span } => {
             let tl = infer_type(left, scope, functions, None, src_info, bin_span)?;
             let tr = infer_type(right, scope, functions, None, src_info, bin_span)?;
             match (&tl, &tr, op) {
-    (Type::Str, Type::Str, BinOp::Add) => Ok(Type::Str),
-    (Type::Str, Type::Str, BinOp::Eq) => Ok(Type::Int),
-    (Type::Str, Type::Str, BinOp::NotEq) => Ok(Type::Int),
-    (Type::Str, _, _) | (_, Type::Str, _) => {
-        Err(src_info.format_error(bin_span, "String operations only allowed with +, ==, !="))
-    }
-    _ => {
-        if tl == Type::Double || tr == Type::Double {
-            Ok(Type::Double)
-        } else {
-            Ok(Type::Int)
-        }
-    }
+                (Type::Str, Type::Str, BinOp::Add) => Ok(Type::Str),
+                (Type::Str, Type::Str, BinOp::Eq) => Ok(Type::Int),
+                (Type::Str, Type::Str, BinOp::NotEq) => Ok(Type::Int),
+                (Type::Str, _, _) | (_, Type::Str, _) => {
+                    Err(src_info.format_error(bin_span, "String operations only allowed with +, ==, !="))
+                }
+                _ => {
+                    if tl == Type::Double || tr == Type::Double {
+                        Ok(Type::Double)
+                    } else {
+                        Ok(Type::Int)
+                    }
+                }
             }
         }
         Expr::Unary { op: _, expr, span: unary_span } => infer_type(expr, scope, functions, None, src_info, unary_span),
+        Expr::Ternary { condition, then_expr, else_expr, span } => {
+            let cond_type = infer_type(condition, scope, functions, None, src_info, span)?;
+            if cond_type != Type::Int {
+                return Err(src_info.format_error(span, "Condition must be integer"));
+            }
+            let then_type = infer_type(then_expr, scope, functions, None, src_info, span)?;
+            let else_type = infer_type(else_expr, scope, functions, None, src_info, span)?;
+            if !type_compatible(&then_type, &else_type) {
+                return Err(src_info.format_error(span, &format!("Ternary branches have incompatible types: {:?} and {:?}", then_type, else_type)));
+            }
+            // Определяем результирующий тип
+            if then_type == Type::Double || else_type == Type::Double {
+                Ok(Type::Double)
+            } else if then_type == Type::Str && else_type == Type::Str {
+                Ok(Type::Str)
+            } else {
+                Ok(Type::Int)
+            }
+        }
     }
 }
 
@@ -786,7 +809,6 @@ fn check_function_call(
         _ => {}
     }
 
-    // Пользовательские функции (не методы)
     let func = functions.iter().find(|f| f.name == name && f.struct_name.is_none())
         .ok_or(src_info.format_error(span, &format!("Function '{}' not defined", name)))?;
     if func.params.len() != args.len() {
