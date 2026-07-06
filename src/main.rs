@@ -29,20 +29,19 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut parser = parser::Parser::new(tokens);
+    // 👇 Передаём source в парсер
+    let mut parser = parser::Parser::new(tokens, source.clone());
     let mut program = parser.parse_program().unwrap_or_else(|e| {
         eprintln!("Parse error: {}", e);
         std::process::exit(1);
     });
 
-    // Определяем базовую директорию для импортов
     let base_dir: PathBuf = PathBuf::from(source_path)
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
     let mut loaded = HashSet::new();
 
-    // Обрабатываем все импорты (рекурсивно)
     process_imports(&mut program, &base_dir, &mut loaded)
         .unwrap_or_else(|e| {
             eprintln!("Import error: {}", e);
@@ -73,16 +72,13 @@ fn main() {
     println!("\x1b[1;32m✅ Compilation successful! Run ./{}\x1b[0m", output_name);
 }
 
-/// Рекурсивно загружает файлы, указанные в `import`, и объединяет их в `program`.
 fn process_imports(
     program: &mut ast::Program,
     base_dir: &Path,
     loaded: &mut HashSet<String>,
 ) -> Result<(), String> {
-    // Забираем текущий список импортов и очищаем его, чтобы не обрабатывать повторно
     let imports = std::mem::take(&mut program.imports);
     for import_path in imports {
-        // Если файл уже был загружен — пропускаем
         if !loaded.insert(import_path.clone()) {
             continue;
         }
@@ -98,23 +94,21 @@ fn process_imports(
             return Err(format!("Lexical error in import '{}'", import_path));
         }
 
-        let mut parser = parser::Parser::new(tokens);
+        // 👇 Передаём source в парсер для импорта
+        let mut parser = parser::Parser::new(tokens, source.clone());
         let mut imported = parser.parse_program()
             .map_err(|e| format!("Parse error in import '{}': {}", import_path, e))?;
 
-        // Рекурсивно обрабатываем импорты внутри импортированного файла
         let imported_base = full_path
             .parent()
             .unwrap_or_else(|| Path::new("."));
         process_imports(&mut imported, imported_base, loaded)?;
 
-        // Объединяем с основной программой (проверяем конфликты)
         merge_programs(program, imported)?;
     }
     Ok(())
 }
 
-/// Добавляет структуры, константы и функции из `imported` в `target`, проверяя дубликаты.
 fn merge_programs(target: &mut ast::Program, imported: ast::Program) -> Result<(), String> {
     for s in imported.structs {
         if target.structs.iter().any(|existing| existing.name == s.name) {
