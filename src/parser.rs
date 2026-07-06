@@ -384,32 +384,31 @@ fn parse_import(&mut self) -> Result<String, String> {
     }
 
     fn parse_for(&mut self) -> Result<Stmt, String> {
-        self.expect(Token::For)?;
-        let var_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected loop variable name in 'for'".to_string());
-        };
-        self.expect(Token::Equals)?;
-        let start = self.parse_expr()?;
-        self.expect(Token::Comma)?;
-        let condition = self.parse_expr()?;
-        self.expect(Token::Comma)?;
-        // Шаг как присваивание
-        let step_var = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected step variable in for".to_string());
-        };
-        self.expect(Token::Equals)?;
-        let step_value = self.parse_expr()?;
-        let _step = Stmt::Assign { name: step_var.clone(), value: step_value.clone() };
-        self.expect(Token::LBrace)?;
-        let mut body = self.parse_block()?;
-        Ok(Stmt::For { var_name, start, condition, step: step_value, body })
-    }
+    self.expect(Token::For)?;
+    let var_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
+        self.advance();
+        n
+    } else {
+        return Err("Expected loop variable name in 'for'".to_string());
+    };
+    self.expect(Token::Equals)?;
+    let start = self.parse_expr()?;
+    self.expect(Token::Comma)?;
+    let condition = self.parse_expr()?;
+    self.expect(Token::Comma)?;
+    let step_var = if let Some(Token::Identifier(n)) = self.peek().cloned() {
+        self.advance();
+        n
+    } else {
+        return Err("Expected step variable in for".to_string());
+    };
+    self.expect(Token::Equals)?;
+    let step_value = self.parse_expr()?;
+    let _step = Stmt::Assign { name: step_var.clone(), value: step_value.clone() };
+    self.expect(Token::LBrace)?;
+    let body = self.parse_block()?;  // <-- убрал mut
+    Ok(Stmt::For { var_name, start, condition, step: step_value, body })
+}
 
     fn parse_return(&mut self) -> Result<Stmt, String> {
         self.expect(Token::Return)?;
