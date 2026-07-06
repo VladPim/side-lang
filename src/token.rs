@@ -31,12 +31,16 @@ pub enum Token {
     #[token("[")]      LBracket,
     #[token("]")]      RBracket,
     #[token("=")]      Equals,
+    #[token("+=")]     PlusEquals,
+    #[token("-=")]     MinusEquals,
+    #[token("*=")]     StarEquals,
+    #[token("/=")]     SlashEquals,
     #[token("==")]     EqualEqual,
     #[token("!=")]     NotEqual,
     #[token("<")]      Less,
     #[token(">")]      Greater,
     #[token("<=")]     LessEqual,
-    #[token(">=")]     GreaterEqual,
+    #[token(">=")]     GreaterEq,
 
     #[token("+")]      Plus,
     #[token("-")]      Minus,
@@ -58,7 +62,7 @@ pub enum Token {
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Identifier(String),
 
-    #[regex(r"##[^\n]*", logos::skip)]
+    #[regex(r"(##|//)[^\n]*", logos::skip)]
     Comment,
 
     #[regex(r"[ \t\r\n\f]+", logos::skip)]
