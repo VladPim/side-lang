@@ -61,7 +61,6 @@ impl Parser {
         while self.peek().is_some() {
             match self.peek() {
                 Some(Token::Import) => {
-                    let start = self.pos;
                     let path = self.parse_import()?;
                     imports.push(path);
                 }
@@ -144,8 +143,8 @@ impl Parser {
         self.expect(Token::LBrace)?;
         let mut fields = vec![];
         while self.peek() != Some(&Token::RBrace) {
-            let field_type = self.parse_type()?;
             let field_span = self.current_span();
+            let field_type = self.parse_type()?;
             let field_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
                 self.advance();
                 n
@@ -160,48 +159,69 @@ impl Parser {
         Ok(StructDef { name, fields, span })
     }
 
-    // -------- Функции ----------
+    // -------- Функции и методы ----------
     fn parse_function(&mut self) -> Result<Function, String> {
         let start = self.pos;
         self.expect(Token::Fn)?;
 
-        let mut return_type = match self.peek() {
-            Some(Token::Int) | Some(Token::Double) | Some(Token::Str) => {
-                self.parse_type()?
-            }
-            Some(Token::Identifier(_)) => {
-                let save_pos = self.pos;
-                let ident = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-                    self.advance();
-                    n
+        let mut struct_name = None;
+        let mut return_type = Type::Int;
+        let mut name = String::new();
+
+        // Определяем, метод это или обычная функция
+        if let Some(Token::Identifier(first)) = self.peek().cloned() {
+            let save_pos = self.pos;
+            self.advance(); // съедаем первый идентификатор
+            if self.peek() == Some(&Token::Dot) {
+                // Это метод!
+                self.advance(); // съедаем точку
+                if let Some(Token::Identifier(method_name)) = self.peek().cloned() {
+                    self.advance(); // съедаем имя метода
+                    struct_name = Some(first);
+                    name = method_name;
                 } else {
-                    return Err(self.format_error(self.pos, "Expected identifier after 'fn'"));
-                };
-                if self.peek() == Some(&Token::LParen) {
-                    self.pos = save_pos;
-                    Type::Int
-                } else {
-                    if matches!(self.peek(), Some(Token::Identifier(_))) {
-                        Type::Struct(ident)
-                    } else {
-                        return Err(self.format_error(self.pos, "Expected function name after return type"));
+                    return Err(self.format_error(self.pos, "Expected method name after '.'"));
+                }
+            } else {
+                // Обычная функция: возвращаемся назад
+                self.pos = save_pos;
+                // Парсим возвращаемый тип, если есть
+                match self.peek() {
+                    Some(Token::Int) | Some(Token::Double) | Some(Token::Str) => {
+                        return_type = self.parse_type()?;
+                    }
+                    Some(Token::Identifier(_)) => {
+                        // Это может быть тип структуры или имя функции (если без типа)
+                        let save_pos2 = self.pos;
+                        self.advance();
+                        if let Some(Token::Identifier(_)) = self.peek() {
+                            // Это тип структуры, потом имя функции
+                            self.pos = save_pos2;
+                            return_type = self.parse_type()?;
+                        } else {
+                            // Это имя функции без указания типа (по умолчанию Int)
+                            self.pos = save_pos2;
+                            return_type = Type::Int;
+                        }
+                    }
+                    _ => {
+                        // Нет возвращаемого типа, значит Int по умолчанию
+                        return_type = Type::Int;
                     }
                 }
+                // Теперь парсим имя функции
+                if let Some(Token::Identifier(func_name)) = self.peek().cloned() {
+                    self.advance();
+                    name = func_name;
+                } else {
+                    return Err(self.format_error(self.pos, "Expected function name"));
+                }
             }
-            _ => Type::Int,
-        };
-
-        if return_type == Type::Array || return_type == Type::DoubleArray {
-            return Err(self.format_error(self.pos, "Array return type not supported"));
+        } else {
+            return Err(self.format_error(self.pos, "Expected function name or struct name"));
         }
 
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err(self.format_error(self.pos, "Expected function name"));
-        };
-
+        // Парсим параметры
         self.expect(Token::LParen)?;
         let mut params = vec![];
         if self.peek() != Some(&Token::RParen) {
@@ -224,6 +244,7 @@ impl Parser {
         }
         self.expect(Token::RParen)?;
 
+        // Возвращаемый тип (если есть ->)
         if self.peek() == Some(&Token::Arrow) {
             self.advance();
             return_type = self.parse_type()?;
@@ -233,7 +254,15 @@ impl Parser {
         let body = self.parse_block()?;
         let end = self.pos - 1;
         let span = self.span_from(start, end);
-        Ok(Function { name, params, return_type, body, span })
+
+        Ok(Function {
+            name,
+            struct_name,
+            params,
+            return_type,
+            body,
+            span,
+        })
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
@@ -392,7 +421,6 @@ impl Parser {
             return Err(self.format_error(self.pos, "Expected identifier"));
         };
 
-        // Индексированное присваивание
         if self.peek() == Some(&Token::LBracket) {
             self.expect(Token::LBracket)?;
             let index = self.parse_expr()?;
@@ -404,7 +432,6 @@ impl Parser {
             return Ok(Stmt::AssignIndex { name, index, value, span });
         }
 
-        // Вызов функции
         if self.peek() == Some(&Token::LParen) {
             let args = self.parse_call_args()?;
             if self.peek() == Some(&Token::Equals) {
@@ -419,7 +446,6 @@ impl Parser {
                 Ok(Stmt::CallStmt { name, args, span })
             }
         } else {
-            // Проверяем составные операторы
             let op = match self.peek() {
                 Some(Token::PlusEquals) => Some(BinOp::Add),
                 Some(Token::MinusEquals) => Some(BinOp::Sub),
@@ -429,7 +455,7 @@ impl Parser {
             };
 
             if let Some(bin_op) = op {
-                self.advance(); // съедаем +=, -=, etc.
+                self.advance();
                 let rhs = self.parse_expr()?;
                 let left = Expr::Variable(name.clone(), self.current_span());
                 let right = rhs;
@@ -573,7 +599,6 @@ impl Parser {
     }
 
     fn parse_or(&mut self) -> Result<Expr, String> {
-        let start = self.pos;
         let mut left = self.parse_and()?;
         while self.peek() == Some(&Token::Or) {
             self.advance();
@@ -585,7 +610,6 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr, String> {
-        let start = self.pos;
         let mut left = self.parse_comparison()?;
         while self.peek() == Some(&Token::And) {
             self.advance();
@@ -597,7 +621,6 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let start = self.pos;
         let mut left = self.parse_addition()?;
         while let Some(op) = self.peek() {
             let binop = match op {
@@ -618,7 +641,6 @@ impl Parser {
     }
 
     fn parse_addition(&mut self) -> Result<Expr, String> {
-        let start = self.pos;
         let mut left = self.parse_multiplication()?;
         while let Some(op) = self.peek() {
             match op {
@@ -641,7 +663,6 @@ impl Parser {
     }
 
     fn parse_multiplication(&mut self) -> Result<Expr, String> {
-        let start = self.pos;
         let mut left = self.parse_unary()?;
         while let Some(op) = self.peek() {
             match op {
@@ -664,7 +685,6 @@ impl Parser {
     }
 
     fn parse_unary(&mut self) -> Result<Expr, String> {
-        let start = self.pos;
         if self.peek() == Some(&Token::Not) {
             self.advance();
             let expr = self.parse_unary()?;
@@ -702,7 +722,18 @@ impl Parser {
                         return Err(self.format_error(self.pos, "Expected field name after '.'"));
                     };
                     let span = expr.span().merge(&self.current_span());
-                    expr = Expr::FieldAccess { expr: Box::new(expr), field, span };
+                    if self.peek() == Some(&Token::LParen) {
+                        let args = self.parse_call_args()?;
+                        let call_span = span.merge(&self.current_span());
+                        expr = Expr::MethodCall {
+                            instance: Box::new(expr),
+                            method: field,
+                            args,
+                            span: call_span,
+                        };
+                    } else {
+                        expr = Expr::FieldAccess { expr: Box::new(expr), field, span };
+                    }
                 }
                 _ => break,
             }
@@ -819,7 +850,7 @@ impl Parser {
     }
 }
 
-// Добавляем метод span() для Expr
+// Реализация span() для Expr
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
@@ -829,6 +860,7 @@ impl Expr {
             Expr::Variable(_, span) => *span,
             Expr::Input(_, span) => *span,
             Expr::Call { span, .. } => *span,
+            Expr::MethodCall { span, .. } => *span,
             Expr::StructLiteral { span, .. } => *span,
             Expr::ArrayLiteral(_, span) => *span,
             Expr::Index { span, .. } => *span,
