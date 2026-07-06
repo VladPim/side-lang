@@ -63,7 +63,7 @@ pub fn generate(program: &Program, source: String) -> Result<String, String> {
             _ => "const int",
         };
         out.push_str(&format!("{} {} = ", c_type, c.name));
-        generate_expr(&c.value, &mut out, &Scope::new(), &src_info)?;
+        generate_expr(&c.value, &mut out, &Scope::new(), &program.functions, &src_info)?;
         out.push_str(";\n");
     }
 
@@ -105,7 +105,7 @@ char* side_str(int n) { static char buf[20]; sprintf(buf, "%d", n); return buf; 
 char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); return buf; }
 "#);
 
-    // Генерируем функции
+    // Генерируем функции (включая методы)
     let mut non_main = Vec::new();
     let mut mains = Vec::new();
     for func in &program.functions {
@@ -117,18 +117,40 @@ char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); re
     }
 
     for func in non_main.iter().chain(mains.iter()) {
-        let c_name = if func.name == "main" { "side_main".to_string() } else { format!("side_{}", func.name) };
+        // Определяем имя C-функции
+        let c_name = if let Some(ref struct_name) = func.struct_name {
+            format!("side_{}_{}", struct_name, func.name)
+        } else if func.name == "main" {
+            "side_main".to_string()
+        } else {
+            format!("side_{}", func.name)
+        };
+
         let return_c = type_to_c(&func.return_type);
-        let params_str = func.params.iter()
-            .map(|p| format!("{} {}", type_to_c(&p.param_type), p.name))
-            .collect::<Vec<_>>()
-            .join(", ");
+        
+        // Формируем параметры: если это метод, добавляем self первым
+        let mut params = Vec::new();
+        if let Some(ref struct_name) = func.struct_name {
+            let self_type = Type::Struct(struct_name.clone());
+            params.push(format!("{} self", type_to_c(&self_type)));
+        }
+        for p in &func.params {
+            params.push(format!("{} {}", type_to_c(&p.param_type), p.name));
+        }
+        let params_str = params.join(", ");
 
         out.push_str(&format!("{} {}({})", return_c, c_name, params_str));
         out.push_str(" {\n");
 
         let mut scope = Scope::new();
-        for p in &func.params { scope.declare(&p.name, p.param_type.clone()); }
+        // Если метод, добавляем переменную self в область видимости
+        if let Some(ref struct_name) = func.struct_name {
+            let self_type = Type::Struct(struct_name.clone());
+            scope.declare("self", self_type);
+        }
+        for p in &func.params {
+            scope.declare(&p.name, p.param_type.clone());
+        }
         generate_stmts(&func.body, &mut out, 1, &mut scope, &program.functions, &func.return_type, &src_info)?;
 
         if func.return_type == Type::Int || func.return_type == Type::Double {
@@ -181,7 +203,7 @@ fn generate_stmts(
                             out.push_str(&format!("{}    {} _arr_vals[] = {{", pad, elem_c_type));
                             for (i, e) in elems.iter().enumerate() {
                                 if i > 0 { out.push_str(", "); }
-                                generate_expr(e, out, scope, src_info)?;
+                                generate_expr(e, out, scope, functions, src_info)?;
                             }
                             out.push_str(&format!("}};\n"));
                             let create_func = if final_type == Type::DoubleArray {
@@ -197,7 +219,7 @@ fn generate_stmts(
                     }
                 } else {
                     out.push_str(&format!("{}{} {} = ", pad, c_type, name));
-                    generate_expr(value, out, scope, src_info)?;
+                    generate_expr(value, out, scope, functions, src_info)?;
                     out.push_str(";\n");
                 }
                 scope.declare(name, final_type);
@@ -213,7 +235,7 @@ fn generate_stmts(
                     )));
                 }
                 out.push_str(&format!("{}{} = ", pad, name));
-                generate_expr(value, out, scope, src_info)?;
+                generate_expr(value, out, scope, functions, src_info)?;
                 out.push_str(";\n");
             }
             Stmt::AssignIndex { name, index, value, span } => {
@@ -232,9 +254,9 @@ fn generate_stmts(
                     )));
                 }
                 out.push_str(&format!("{}{}[", pad, name));
-                generate_expr(index, out, scope, src_info)?;
+                generate_expr(index, out, scope, functions, src_info)?;
                 out.push_str("] = ");
-                generate_expr(value, out, scope, src_info)?;
+                generate_expr(value, out, scope, functions, src_info)?;
                 out.push_str(";\n");
             }
             Stmt::IoPrint(args, span) => {
@@ -246,14 +268,14 @@ fn generate_stmts(
                         _ => "%d",
                     };
                     out.push_str(&format!("{}printf(\"{}\", ", pad, format));
-                    generate_expr(arg, out, scope, src_info)?;
+                    generate_expr(arg, out, scope, functions, src_info)?;
                     out.push_str(");\n");
                 }
                 out.push_str(&format!("{}printf(\"\\n\");\n", pad));
             }
             Stmt::If { condition, then_body, else_body, span } => {
                 out.push_str(&format!("{}if (", pad));
-                generate_expr(condition, out, scope, src_info)?;
+                generate_expr(condition, out, scope, functions, src_info)?;
                 out.push_str(") {\n");
                 let mut block_scope = scope.push();
                 generate_stmts(then_body, out, indent + 1, &mut block_scope, functions, expected_return_type, src_info)?;
@@ -267,7 +289,7 @@ fn generate_stmts(
             }
             Stmt::While { condition, body, span } => {
                 out.push_str(&format!("{}while (", pad));
-                generate_expr(condition, out, scope, src_info)?;
+                generate_expr(condition, out, scope, functions, src_info)?;
                 out.push_str(") {\n");
                 let mut while_scope = scope.push();
                 generate_stmts(body, out, indent + 1, &mut while_scope, functions, expected_return_type, src_info)?;
@@ -278,17 +300,17 @@ fn generate_stmts(
                 let c_type = type_to_c(&start_type);
                 out.push_str(&format!("{}{{\n", pad));
                 out.push_str(&format!("{}    {} {} = ", pad, c_type, var_name));
-                generate_expr(start, out, scope, src_info)?;
+                generate_expr(start, out, scope, functions, src_info)?;
                 out.push_str(";\n");
                 let mut for_scope = scope.push();
                 for_scope.declare(var_name, start_type.clone());
                 out.push_str(&format!("{}    while (", pad));
-                generate_expr(condition, out, &for_scope, src_info)?;
+                generate_expr(condition, out, &for_scope, functions, src_info)?;
                 out.push_str(") {\n");
                 let mut body_scope = for_scope.push();
                 generate_stmts(body, out, indent + 2, &mut body_scope, functions, expected_return_type, src_info)?;
                 out.push_str(&format!("{}        {} = ", pad, var_name));
-                generate_expr(step, out, &for_scope, src_info)?;
+                generate_expr(step, out, &for_scope, functions, src_info)?;
                 out.push_str(";\n");
                 out.push_str(&format!("{}    }}\n", pad));
                 out.push_str(&format!("{}}}\n", pad));
@@ -302,7 +324,7 @@ fn generate_stmts(
                     )));
                 }
                 out.push_str(&format!("{}return ", pad));
-                generate_expr(expr, out, scope, src_info)?;
+                generate_expr(expr, out, scope, functions, src_info)?;
                 out.push_str(";\n");
             }
             Stmt::Break(span) => out.push_str(&format!("{}break;\n", pad)),
@@ -321,7 +343,7 @@ fn generate_stmts(
                         } else {
                             return Err(src_info.format_error(span, "First argument of push must be an array"));
                         }
-                        generate_expr(&args[1], out, scope, src_info)?;
+                        generate_expr(&args[1], out, scope, functions, src_info)?;
                         out.push_str(");\n");
                     }
                     "pop" => {
@@ -337,11 +359,21 @@ fn generate_stmts(
                         }
                     }
                     _ => {
+                        // Проверяем, не метод ли это (функция с struct_name)
+                        let func = functions.iter().find(|f| f.name == *name);
+                        if let Some(f) = func {
+                            if let Some(ref struct_name) = f.struct_name {
+                                // Это метод, но он вызывается как обычная функция – пока поддерживаем только через точку
+                                // Здесь мы не будем обрабатывать, т.к. вызов метода должен быть через Expr::MethodCall
+                                return Err(src_info.format_error(span, &format!("Method '{}' must be called with dot syntax", name)));
+                            }
+                        }
+                        // Обычная функция
                         let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
                         out.push_str(&format!("{}{}(", pad, c_name));
                         for (i, arg) in args.iter().enumerate() {
                             if i > 0 { out.push_str(", "); }
-                            generate_expr(arg, out, scope, src_info)?;
+                            generate_expr(arg, out, scope, functions, src_info)?;
                         }
                         out.push_str(");\n");
                     }
@@ -356,6 +388,7 @@ fn generate_expr(
     expr: &Expr,
     out: &mut String,
     scope: &Scope,
+    functions: &[Function],
     src_info: &SourceInfo,
 ) -> Result<(), String> {
     match expr {
@@ -370,13 +403,13 @@ fn generate_expr(
                     if args.len() != 1 {
                         return Err(src_info.format_error(span, "len requires 1 argument"));
                     }
-                    let tp = infer_type(&args[0], scope, &[], None, src_info, span)?;
+                    let tp = infer_type(&args[0], scope, functions, None, src_info, span)?;
                     if tp == Type::Array || tp == Type::DoubleArray {
                         let arr_name = extract_var_name(&args[0], src_info, span)?;
                         out.push_str(&format!("{}_size", arr_name));
                     } else if tp == Type::Str {
                         out.push_str("strlen(");
-                        generate_expr(&args[0], out, scope, src_info)?;
+                        generate_expr(&args[0], out, scope, functions, src_info)?;
                         out.push_str(")");
                     } else {
                         return Err(src_info.format_error(span, "len argument must be array or string"));
@@ -388,7 +421,7 @@ fn generate_expr(
                     out.push('(');
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 { out.push_str(", "); }
-                        generate_expr(arg, out, scope, src_info)?;
+                        generate_expr(arg, out, scope, functions, src_info)?;
                     }
                     out.push(')');
                 }
@@ -396,36 +429,68 @@ fn generate_expr(
                     if args.len() != 1 {
                         return Err(src_info.format_error(span, "str() requires 1 argument"));
                     }
-                    let tp = infer_type(&args[0], scope, &[], None, src_info, span)?;
+                    let tp = infer_type(&args[0], scope, functions, None, src_info, span)?;
                     if tp == Type::Double {
                         out.push_str("side_str_double(");
                     } else {
                         out.push_str("side_str(");
                     }
-                    generate_expr(&args[0], out, scope, src_info)?;
+                    generate_expr(&args[0], out, scope, functions, src_info)?;
                     out.push(')');
                 }
                 "int" => {
                     out.push_str("atoi(");
-                    generate_expr(&args[0], out, scope, src_info)?;
+                    generate_expr(&args[0], out, scope, functions, src_info)?;
                     out.push(')');
                 }
                 _ => {
+                    // Проверяем, не метод ли это (у функции есть struct_name)
+                    let func = functions.iter().find(|f| f.name == *name);
+                    if let Some(f) = func {
+                        if let Some(ref struct_name) = f.struct_name {
+                            // Это метод, но вызван без экземпляра – ошибка
+                            return Err(src_info.format_error(span, &format!("Method '{}' must be called on an instance", name)));
+                        }
+                    }
                     let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
                     out.push_str(&format!("{}(", c_name));
                     for (i, arg) in args.iter().enumerate() {
                         if i > 0 { out.push_str(", "); }
-                        generate_expr(arg, out, scope, src_info)?;
+                        generate_expr(arg, out, scope, functions, src_info)?;
                     }
                     out.push(')');
                 }
             }
         }
+        Expr::MethodCall { instance, method, args, span } => {
+            // Определяем тип экземпляра
+            let instance_type = infer_type(instance, scope, functions, None, src_info, span)?;
+            let struct_name = match instance_type {
+                Type::Struct(name) => name,
+                _ => return Err(src_info.format_error(span, "Method call on non-struct type")),
+            };
+            // Ищем метод
+            let method_func = functions.iter().find(|f| {
+                f.struct_name.as_ref() == Some(&struct_name) && f.name == *method
+            }).ok_or_else(|| {
+                src_info.format_error(span, &format!("Method '{}' not found for struct '{}'", method, struct_name))
+            })?;
+            // Генерируем вызов: side_{struct_name}_{method}(instance, args...)
+            let c_name = format!("side_{}_{}", struct_name, method);
+            out.push_str(&format!("{}(", c_name));
+            // Первый аргумент – экземпляр
+            generate_expr(instance, out, scope, functions, src_info)?;
+            for arg in args {
+                out.push_str(", ");
+                generate_expr(arg, out, scope, functions, src_info)?;
+            }
+            out.push(')');
+        }
         Expr::StructLiteral { name, fields, span } => {
             out.push_str(&format!("(side_{}){{", name));
             for (i, f) in fields.iter().enumerate() {
                 if i > 0 { out.push_str(", "); }
-                generate_expr(f, out, scope, src_info)?;
+                generate_expr(f, out, scope, functions, src_info)?;
             }
             out.push('}');
         }
@@ -433,24 +498,25 @@ fn generate_expr(
             out.push_str("{");
             for (i, e) in elements.iter().enumerate() {
                 if i > 0 { out.push_str(", "); }
-                generate_expr(e, out, scope, src_info)?;
+                generate_expr(e, out, scope, functions, src_info)?;
             }
             out.push('}');
         }
         Expr::Index { array, index, span } => {
-            generate_expr(array, out, scope, src_info)?;
+            generate_expr(array, out, scope, functions, src_info)?;
             out.push('[');
-            generate_expr(index, out, scope, src_info)?;
+            generate_expr(index, out, scope, functions, src_info)?;
             out.push(']');
         }
         Expr::FieldAccess { expr, field, span } => {
-            generate_expr(expr, out, scope, src_info)?;
+            // Доступ к полю структуры
+            generate_expr(expr, out, scope, functions, src_info)?;
             out.push('.');
             out.push_str(field);
         }
         Expr::Binary { left, op, right, span } => {
             out.push('(');
-            generate_expr(left, out, scope, src_info)?;
+            generate_expr(left, out, scope, functions, src_info)?;
             let op_str = match op {
                 BinOp::Add => " + ",
                 BinOp::Sub => " - ",
@@ -466,19 +532,19 @@ fn generate_expr(
                 BinOp::Or => " || ",
             };
             out.push_str(op_str);
-            generate_expr(right, out, scope, src_info)?;
+            generate_expr(right, out, scope, functions, src_info)?;
             out.push(')');
         }
         Expr::Unary { op, expr, span } => {
             match op {
                 UnaryOp::Not => {
                     out.push_str("!(");
-                    generate_expr(expr, out, scope, src_info)?;
+                    generate_expr(expr, out, scope, functions, src_info)?;
                     out.push(')');
                 }
                 UnaryOp::Neg => {
                     out.push_str("-(");
-                    generate_expr(expr, out, scope, src_info)?;
+                    generate_expr(expr, out, scope, functions, src_info)?;
                     out.push(')');
                 }
             }
@@ -531,6 +597,21 @@ fn infer_type(
                 Ok(func.return_type.clone())
             }
         },
+        Expr::MethodCall { instance, method, args: _, span: method_span } => {
+            // Определяем тип экземпляра
+            let instance_type = infer_type(instance, scope, functions, None, src_info, method_span)?;
+            let struct_name = match instance_type {
+                Type::Struct(name) => name,
+                _ => return Err(src_info.format_error(method_span, "Method call on non-struct type")),
+            };
+            // Ищем метод
+            let method_func = functions.iter().find(|f| {
+                f.struct_name.as_ref() == Some(&struct_name) && f.name == *method
+            }).ok_or_else(|| {
+                src_info.format_error(method_span, &format!("Method '{}' not found for struct '{}'", method, struct_name))
+            })?;
+            Ok(method_func.return_type.clone())
+        }
         Expr::StructLiteral { name, .. } => Ok(Type::Struct(name.clone())),
         Expr::ArrayLiteral(elements, _) => {
             if elements.is_empty() {
@@ -559,7 +640,10 @@ fn infer_type(
                 _ => Err(src_info.format_error(span, "Indexing non-array")),
             }
         }
-        Expr::FieldAccess { .. } => Ok(Type::Int),
+        Expr::FieldAccess { expr, .. } => {
+            // Пока считаем, что поля всегда типа Int (можно доработать)
+            Ok(Type::Int)
+        }
         Expr::Binary { left, op: _, right, span: bin_span } => {
             let tl = infer_type(left, scope, functions, None, src_info, bin_span)?;
             let tr = infer_type(right, scope, functions, None, src_info, bin_span)?;
@@ -661,8 +745,8 @@ fn check_function_call(
         _ => {}
     }
 
-    // Пользовательские функции
-    let func = functions.iter().find(|f| f.name == name)
+    // Пользовательские функции (не методы)
+    let func = functions.iter().find(|f| f.name == name && f.struct_name.is_none())
         .ok_or(src_info.format_error(span, &format!("Function '{}' not defined", name)))?;
     if func.params.len() != args.len() {
         return Err(src_info.format_error(span, &format!("Function '{}' expects {} arguments, got {}", name, func.params.len(), args.len())));
