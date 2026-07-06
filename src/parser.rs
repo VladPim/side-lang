@@ -627,3 +627,21 @@ fn parse_import(&mut self) -> Result<String, String> {
         }
     }
 }
+
+fn parse_struct_literal(&mut self, name: String) -> Result<Expr, String> {
+    self.expect(Token::LBrace)?;
+    let mut fields = vec![];
+    if self.peek() != Some(&Token::RBrace) {
+        loop {
+            let field_expr = self.parse_expr()?;
+            fields.push(field_expr);
+            if self.peek() == Some(&Token::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+    self.expect(Token::RBrace)?;
+    Ok(Expr::StructLiteral { name, fields })
+}
