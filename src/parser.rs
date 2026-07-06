@@ -595,7 +595,26 @@ impl Parser {
 
     // -------- Выражения ----------
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_or()
+        self.parse_ternary()
+    }
+
+    fn parse_ternary(&mut self) -> Result<Expr, String> {
+        let cond = self.parse_or()?;
+        if self.peek() == Some(&Token::Question) {
+            self.advance();
+            let then_expr = self.parse_expr()?;
+            self.expect(Token::Colon)?;
+            let else_expr = self.parse_ternary()?; // правоассоциативность
+            let span = cond.span().merge(&else_expr.span());
+            Ok(Expr::Ternary {
+                condition: Box::new(cond),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+                span,
+            })
+        } else {
+            Ok(cond)
+        }
     }
 
     fn parse_or(&mut self) -> Result<Expr, String> {
@@ -705,7 +724,7 @@ impl Parser {
         loop {
             match self.peek() {
                 Some(Token::LBracket) => {
-                    let start = self.pos;
+                    let _start = self.pos;
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(Token::RBracket)?;
@@ -713,7 +732,7 @@ impl Parser {
                     expr = Expr::Index { array: Box::new(expr), index: Box::new(index), span };
                 }
                 Some(Token::Dot) => {
-                    let start = self.pos;
+                    let _start = self.pos;
                     self.advance();
                     let field = if let Some(Token::Identifier(f)) = self.peek().cloned() {
                         self.advance();
@@ -846,27 +865,6 @@ impl Parser {
                 Ok(expr)
             }
             other => Err(self.format_error(self.pos, &format!("Unexpected token in expression: {:?}", other))),
-        }
-    }
-}
-
-// Реализация span() для Expr
-impl Expr {
-    pub fn span(&self) -> Span {
-        match self {
-            Expr::Number(_, span) => *span,
-            Expr::DoubleLiteral(_, span) => *span,
-            Expr::StringLiteral(_, span) => *span,
-            Expr::Variable(_, span) => *span,
-            Expr::Input(_, span) => *span,
-            Expr::Call { span, .. } => *span,
-            Expr::MethodCall { span, .. } => *span,
-            Expr::StructLiteral { span, .. } => *span,
-            Expr::ArrayLiteral(_, span) => *span,
-            Expr::Index { span, .. } => *span,
-            Expr::FieldAccess { span, .. } => *span,
-            Expr::Binary { span, .. } => *span,
-            Expr::Unary { span, .. } => *span,
         }
     }
 }
