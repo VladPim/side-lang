@@ -20,7 +20,7 @@ pub fn generate(program: &Program) -> Result<String, String> {
     let mut out = String::new();
     out.push_str("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <time.h>\n\n");
 
-    // Генерация констант
+    // Константы
     for c in &program.constants {
         let c_type = match &c.value {
             Expr::DoubleLiteral(_) => "const double",
@@ -32,7 +32,7 @@ pub fn generate(program: &Program) -> Result<String, String> {
         out.push_str(";\n");
     }
 
-    // Генерация структур
+    // Структуры
     for s in &program.structs {
         out.push_str(&format!("typedef struct {{\n"));
         for f in &s.fields {
@@ -42,7 +42,7 @@ pub fn generate(program: &Program) -> Result<String, String> {
         out.push_str(&format!("}} side_{};\n\n", s.name));
     }
 
-    // Встроенные функции (оставляем как есть)
+    // Встроенные функции
     out.push_str(r#"
 void side_arr_push(int** arr, int* size, int* cap, int value) {
     if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(int)); }
@@ -70,7 +70,7 @@ char* side_str(int n) { static char buf[20]; sprintf(buf, "%d", n); return buf; 
 char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); return buf; }
 "#);
 
-    // Собираем функции
+    // Генерируем функции
     let mut non_main = Vec::new();
     let mut mains = Vec::new();
     for func in &program.functions {
@@ -95,7 +95,13 @@ char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); re
         let mut scope = Scope::new();
         for p in &func.params { scope.declare(&p.name, p.param_type.clone()); }
         generate_stmts(&func.body, &mut out, 1, &mut scope, &program.functions, &func.return_type)?;
-        out.push_str("    return 0;\n}\n\n");
+
+        // Добавляем return только для числовых типов (int и double)
+        if func.return_type == Type::Int || func.return_type == Type::Double {
+            out.push_str("    return 0;\n");
+        }
+        // Для void (если когда-нибудь появится) и для структур/строк ничего не добавляем
+        out.push_str("}\n\n");
     }
 
     out.push_str("int main() { return side_main(); }\n");
@@ -162,7 +168,6 @@ fn generate_stmts(
                 }
                 scope.declare(name, final_type);
             }
-            // Остальные варианты Stmt остаются без изменений
             Stmt::Assign { name, value } => {
                 let var_type = scope.get(name)
                     .ok_or(format!("Variable '{}' not declared in this scope", name))?;
