@@ -41,6 +41,8 @@ pub enum Token {
     #[token(">")]      Greater,
     #[token("<=")]     LessEqual,
     #[token(">=")]     GreaterEq,
+    #[token("?")]      Question,
+    #[token(":")]      Colon,
 
     #[token("+")]      Plus,
     #[token("-")]      Minus,
