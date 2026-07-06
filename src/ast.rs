@@ -1,3 +1,23 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    /// Объединяет два спана в один (от начала первого до конца второго)
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Program {
     pub imports: Vec<String>,
@@ -10,18 +30,21 @@ pub struct Program {
 pub struct Constant {
     pub name: String,
     pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<Field>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: String,
     pub field_type: Type,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -30,12 +53,14 @@ pub struct Function {
     pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Vec<Stmt>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
     pub param_type: Type,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,25 +79,30 @@ pub enum Stmt {
         name: String,
         var_type: Option<Type>,
         value: Expr,
+        span: Span,
     },
     Assign {
         name: String,
         value: Expr,
+        span: Span,
     },
     AssignIndex {
         name: String,
         index: Expr,
         value: Expr,
+        span: Span,
     },
-    IoPrint(Vec<Expr>),
+    IoPrint(Vec<Expr>, Span),
     If {
         condition: Expr,
         then_body: Vec<Stmt>,
         else_body: Option<Vec<Stmt>>,
+        span: Span,
     },
     While {
         condition: Expr,
         body: Vec<Stmt>,
+        span: Span,
     },
     For {
         var_name: String,
@@ -80,48 +110,56 @@ pub enum Stmt {
         condition: Expr,
         step: Expr,
         body: Vec<Stmt>,
+        span: Span,
     },
-    Return(Expr),
-    Break,
-    Continue,
+    Return(Expr, Span),
+    Break(Span),
+    Continue(Span),
     CallStmt {
         name: String,
         args: Vec<Expr>,
+        span: Span,
     },
 }
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Number(i32),
-    DoubleLiteral(f64),
-    StringLiteral(String),
-    Variable(String),
-    Input(String),
+    Number(i32, Span),
+    DoubleLiteral(f64, Span),
+    StringLiteral(String, Span),
+    Variable(String, Span),
+    Input(String, Span),
     Call {
         name: String,
         args: Vec<Expr>,
+        span: Span,
     },
     StructLiteral {
         name: String,
         fields: Vec<Expr>,
+        span: Span,
     },
-    ArrayLiteral(Vec<Expr>),
+    ArrayLiteral(Vec<Expr>, Span),
     Index {
         array: Box<Expr>,
         index: Box<Expr>,
+        span: Span,
     },
     FieldAccess {
         expr: Box<Expr>,
         field: String,
+        span: Span,
     },
     Binary {
         left: Box<Expr>,
         op: BinOp,
         right: Box<Expr>,
+        span: Span,
     },
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
+        span: Span,
     },
 }
 
