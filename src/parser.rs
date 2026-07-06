@@ -1,646 +1,612 @@
 use crate::ast::*;
-use crate::token::Token;
+use std::collections::HashMap;
 
-pub struct Parser {
-    tokens: Vec<(Token, std::ops::Range<usize>)>,
-    pos: usize,
+#[derive(Clone)]
+struct Scope {
+    vars: HashMap<String, Type>,
+    parent: Option<Box<Scope>>,
 }
 
-impl Parser {
-    pub fn new(tokens: Vec<(Token, std::ops::Range<usize>)>) -> Self {
-        Self { tokens, pos: 0 }
-    }
-
-    pub fn parse_program(&mut self) -> Result<Program, String> {
-    let mut imports = vec![];
-    let mut structs = vec![];
-    let mut constants = vec![];
-    let mut functions = vec![];
-
-    while self.peek().is_some() {
-        match self.peek() {
-            Some(Token::Import) => imports.push(self.parse_import()?),
-            Some(Token::Struct) => structs.push(self.parse_struct_def()?),
-            Some(Token::Fn) => functions.push(self.parse_function()?),
-            Some(Token::Let) => constants.push(self.parse_constant()?),
-            other => return Err(format!("Unexpected top-level token: {:?}", other)),
-        }
-    }
-    Ok(Program { imports, structs, constants, functions })
-}
-
-fn parse_import(&mut self) -> Result<String, String> {
-    self.expect(Token::Import)?;
-    if let Some(Token::StringLiteral(path)) = self.peek().cloned() {
-        self.advance();
-        Ok(path)
-    } else {
-        Err("Expected string literal after 'import'".to_string())
+impl Scope {
+    fn new() -> Self { Scope { vars: HashMap::new(), parent: None } }
+    fn push(&self) -> Self { Scope { vars: HashMap::new(), parent: Some(Box::new(self.clone())) } }
+    fn declare(&mut self, name: &str, tp: Type) { self.vars.insert(name.to_string(), tp); }
+    fn get(&self, name: &str) -> Option<Type> {
+        self.vars.get(name).cloned().or_else(|| self.parent.as_ref()?.get(name))
     }
 }
 
-    fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.pos).map(|(t, _)| t)
-    }
+pub fn generate(program: &Program) -> Result<String, String> {
+    let mut out = String::new();
+    out.push_str("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <time.h>\n\n");
 
-    fn advance(&mut self) {
-        self.pos += 1;
-    }
-
-    fn expect(&mut self, expected: Token) -> Result<(), String> {
-        if self.peek() == Some(&expected) {
-            self.advance();
-            Ok(())
-        } else {
-            Err(format!(
-                "Syntax error: expected {:?}, got {:?} at pos {}",
-                expected,
-                self.peek(),
-                self.pos
-            ))
-        }
-    }
-
-    // -------- Константы ----------
-    fn parse_constant(&mut self) -> Result<Constant, String> {
-        self.expect(Token::Let)?;
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected constant name after 'let'".to_string());
+    // Генерация констант
+    for c in &program.constants {
+        let c_type = match &c.value {
+            Expr::DoubleLiteral(_) => "const double",
+            Expr::StringLiteral(_) => "const char*",
+            _ => "const int",
         };
-        self.expect(Token::Equals)?;
-        let value = self.parse_expr()?;
-        Ok(Constant { name, value })
+        out.push_str(&format!("{} {} = ", c_type, c.name));
+        generate_expr(&c.value, &mut out, &Scope::new())?;
+        out.push_str(";\n");
     }
 
-    // -------- Структуры ----------
-    fn parse_struct_def(&mut self) -> Result<StructDef, String> {
-        self.expect(Token::Struct)?;
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected struct name".to_string());
-        };
-        self.expect(Token::LBrace)?;
-        let mut fields = vec![];
-        while self.peek() != Some(&Token::RBrace) {
-            let field_type = self.parse_type()?;
-            let field_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-                self.advance();
-                n
-            } else {
-                return Err("Expected field name".to_string());
-            };
-            fields.push(Field { name: field_name, field_type });
+    // Генерация структур
+    for s in &program.structs {
+        out.push_str(&format!("typedef struct {{\n"));
+        for f in &s.fields {
+            let type_str = type_to_c(&f.field_type);
+            out.push_str(&format!("    {} {};\n", type_str, f.name));
         }
-        self.expect(Token::RBrace)?;
-        Ok(StructDef { name, fields })
+        out.push_str(&format!("}} side_{};\n\n", s.name));
     }
 
-    // -------- Функции ----------
-    fn parse_function(&mut self) -> Result<Function, String> {
-        self.expect(Token::Fn)?;
+    // Встроенные функции (оставляем как есть)
+    out.push_str(r#"
+void side_arr_push(int** arr, int* size, int* cap, int value) {
+    if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(int)); }
+    (*arr)[*size] = value; (*size)++;
+}
+int side_arr_pop(int** arr, int* size, int* cap) {
+    if (*size <= 0) return -1; int val = (*arr)[*size - 1]; (*size)--; return val;
+}
+int* side_arr_create(int n, int* vals) {
+    int* arr = malloc(n * sizeof(int)); for (int i = 0; i < n; i++) arr[i] = vals[i]; return arr;
+}
+void side_arr_push_double(double** arr, int* size, int* cap, double value) {
+    if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(double)); }
+    (*arr)[*size] = value; (*size)++;
+}
+double side_arr_pop_double(double** arr, int* size, int* cap) {
+    if (*size <= 0) return -1.0; double val = (*arr)[*size - 1]; (*size)--; return val;
+}
+double* side_arr_create_double(int n, double* vals) {
+    double* arr = malloc(n * sizeof(double)); for (int i = 0; i < n; i++) arr[i] = vals[i]; return arr;
+}
+int side_input(const char* prompt) { int val; printf("%s", prompt); scanf("%d", &val); return val; }
+int side_time() { return (int)(clock() * 1000 / CLOCKS_PER_SEC); }
+char* side_str(int n) { static char buf[20]; sprintf(buf, "%d", n); return buf; }
+char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); return buf; }
+"#);
 
-        let mut return_type = match self.peek() {
-            Some(Token::Int) | Some(Token::Double) | Some(Token::Str) => {
-                self.parse_type()?
-            }
-            Some(Token::Identifier(_)) => {
-                let save_pos = self.pos;
-                let ident = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-                    self.advance();
-                    n
-                } else {
-                    return Err("Expected identifier after 'fn'".to_string());
+    // Собираем функции
+    let mut non_main = Vec::new();
+    let mut mains = Vec::new();
+    for func in &program.functions {
+        if func.name == "main" {
+            mains.push(func);
+        } else {
+            non_main.push(func);
+        }
+    }
+
+    for func in non_main.iter().chain(mains.iter()) {
+        let c_name = if func.name == "main" { "side_main".to_string() } else { format!("side_{}", func.name) };
+        let return_c = type_to_c(&func.return_type);
+        let params_str = func.params.iter()
+            .map(|p| format!("{} {}", type_to_c(&p.param_type), p.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        out.push_str(&format!("{} {}({})", return_c, c_name, params_str));
+        out.push_str(" {\n");
+
+        let mut scope = Scope::new();
+        for p in &func.params { scope.declare(&p.name, p.param_type.clone()); }
+        generate_stmts(&func.body, &mut out, 1, &mut scope, &program.functions, &func.return_type)?;
+        out.push_str("    return 0;\n}\n\n");
+    }
+
+    out.push_str("int main() { return side_main(); }\n");
+    Ok(out)
+}
+
+fn generate_stmts(
+    stmts: &[Stmt],
+    out: &mut String,
+    indent: usize,
+    scope: &mut Scope,
+    functions: &[Function],
+    expected_return_type: &Type,
+) -> Result<(), String> {
+    let pad = "    ".repeat(indent);
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { name, var_type, value } => {
+                let declared_type = var_type.clone();
+                let actual_type = infer_type(value, scope, functions, declared_type.as_ref())?;
+                let final_type = match declared_type {
+                    Some(ref dt) => {
+                        if !type_compatible(dt, &actual_type) {
+                            return Err(format!(
+                                "Type mismatch: cannot assign {:?} to variable '{}' of type {:?}",
+                                actual_type, name, dt
+                            ));
+                        }
+                        dt.clone()
+                    }
+                    None => actual_type.clone(),
                 };
-                if self.peek() == Some(&Token::LParen) {
-                    self.pos = save_pos;
-                    Type::Int
+
+                let c_type = type_to_c(&final_type);
+                if final_type == Type::Array || final_type == Type::DoubleArray {
+                    let elem_c_type = if final_type == Type::DoubleArray { "double" } else { "int" };
+                    out.push_str(&format!("{}{}* {} = NULL;\n", pad, elem_c_type, name));
+                    out.push_str(&format!("{}int {}_size = 0;\n", pad, name));
+                    out.push_str(&format!("{}int {}_cap = 0;\n", pad, name));
+                    if let Expr::ArrayLiteral(elems) = value {
+                        if !elems.is_empty() {
+                            out.push_str(&format!("{}{{\n", pad));
+                            out.push_str(&format!("{}    {} _arr_vals[] = {{", pad, elem_c_type));
+                            for (i, e) in elems.iter().enumerate() {
+                                if i > 0 { out.push_str(", "); }
+                                generate_expr(e, out, scope)?;
+                            }
+                            out.push_str(&format!("}};\n"));
+                            let create_func = if final_type == Type::DoubleArray {
+                                "side_arr_create_double"
+                            } else {
+                                "side_arr_create"
+                            };
+                            out.push_str(&format!("{}    {} = {}({}, _arr_vals);\n", pad, name, create_func, elems.len()));
+                            out.push_str(&format!("{}    {}_size = {};\n", pad, name, elems.len()));
+                            out.push_str(&format!("{}    {}_cap = {};\n", pad, name, elems.len()));
+                            out.push_str(&format!("{}}}\n", pad));
+                        }
+                    }
                 } else {
-                    if matches!(self.peek(), Some(Token::Identifier(_))) {
-                        Type::Struct(ident)
-                    } else {
-                        return Err("Expected function name after return type".to_string());
+                    out.push_str(&format!("{}{} {} = ", pad, c_type, name));
+                    generate_expr(value, out, scope)?;
+                    out.push_str(";\n");
+                }
+                scope.declare(name, final_type);
+            }
+            // Остальные варианты Stmt остаются без изменений
+            Stmt::Assign { name, value } => {
+                let var_type = scope.get(name)
+                    .ok_or(format!("Variable '{}' not declared in this scope", name))?;
+                let actual_type = infer_type(value, scope, functions, Some(&var_type))?;
+                if !type_compatible(&var_type, &actual_type) {
+                    return Err(format!(
+                        "Type mismatch: cannot assign {:?} to variable '{}' of type {:?}",
+                        actual_type, name, var_type
+                    ));
+                }
+                out.push_str(&format!("{}{} = ", pad, name));
+                generate_expr(value, out, scope)?;
+                out.push_str(";\n");
+            }
+            Stmt::AssignIndex { name, index, value } => {
+                let var_type = scope.get(name)
+                    .ok_or(format!("Variable '{}' not declared", name))?;
+                let expected_elem = match var_type {
+                    Type::Array => Type::Int,
+                    Type::DoubleArray => Type::Double,
+                    _ => return Err("Indexing non-array".into()),
+                };
+                let actual_type = infer_type(value, scope, functions, Some(&expected_elem))?;
+                if !type_compatible(&expected_elem, &actual_type) {
+                    return Err(format!(
+                        "Type mismatch: cannot assign {:?} to element of {:?}",
+                        actual_type, var_type
+                    ));
+                }
+                out.push_str(&format!("{}{}[", pad, name));
+                generate_expr(index, out, scope)?;
+                out.push_str("] = ");
+                generate_expr(value, out, scope)?;
+                out.push_str(";\n");
+            }
+            Stmt::IoPrint(args) => {
+                for arg in args {
+                    let tp = infer_type(arg, scope, functions, None)?;
+                    let format = match tp {
+                        Type::Double => "%f",
+                        Type::Str => "%s",
+                        _ => "%d",
+                    };
+                    out.push_str(&format!("{}printf(\"{}\", ", pad, format));
+                    generate_expr(arg, out, scope)?;
+                    out.push_str(");\n");
+                }
+                out.push_str(&format!("{}printf(\"\\n\");\n", pad));
+            }
+            Stmt::If { condition, then_body, else_body } => {
+                out.push_str(&format!("{}if (", pad));
+                generate_expr(condition, out, scope)?;
+                out.push_str(") {\n");
+                let mut block_scope = scope.push();
+                generate_stmts(then_body, out, indent + 1, &mut block_scope, functions, expected_return_type)?;
+                out.push_str(&format!("{}}}\n", pad));
+                if let Some(else_stmts) = else_body {
+                    out.push_str(&format!("{}else {{\n", pad));
+                    let mut else_scope = scope.push();
+                    generate_stmts(else_stmts, out, indent + 1, &mut else_scope, functions, expected_return_type)?;
+                    out.push_str(&format!("{}}}\n", pad));
+                }
+            }
+            Stmt::While { condition, body } => {
+                out.push_str(&format!("{}while (", pad));
+                generate_expr(condition, out, scope)?;
+                out.push_str(") {\n");
+                let mut while_scope = scope.push();
+                generate_stmts(body, out, indent + 1, &mut while_scope, functions, expected_return_type)?;
+                out.push_str(&format!("{}}}\n", pad));
+            }
+            Stmt::For { var_name, start, condition, step, body } => {
+                let start_type = infer_type(start, scope, functions, None)?;
+                let c_type = type_to_c(&start_type);
+                out.push_str(&format!("{}{{\n", pad));
+                out.push_str(&format!("{}    {} {} = ", pad, c_type, var_name));
+                generate_expr(start, out, scope)?;
+                out.push_str(";\n");
+                let mut for_scope = scope.push();
+                for_scope.declare(var_name, start_type.clone());
+                out.push_str(&format!("{}    while (", pad));
+                generate_expr(condition, out, &for_scope)?;
+                out.push_str(") {\n");
+                let mut body_scope = for_scope.push();
+                generate_stmts(body, out, indent + 2, &mut body_scope, functions, expected_return_type)?;
+                out.push_str(&format!("{}        {} = ", pad, var_name));
+                generate_expr(step, out, &for_scope)?;
+                out.push_str(";\n");
+                out.push_str(&format!("{}    }}\n", pad));
+                out.push_str(&format!("{}}}\n", pad));
+            }
+            Stmt::Return(expr) => {
+                let actual_type = infer_type(expr, scope, functions, Some(expected_return_type))?;
+                if !type_compatible(expected_return_type, &actual_type) {
+                    return Err(format!(
+                        "Return type mismatch: expected {:?}, got {:?}",
+                        expected_return_type, actual_type
+                    ));
+                }
+                out.push_str(&format!("{}return ", pad));
+                generate_expr(expr, out, scope)?;
+                out.push_str(";\n");
+            }
+            Stmt::Break => out.push_str(&format!("{}break;\n", pad)),
+            Stmt::Continue => out.push_str(&format!("{}continue;\n", pad)),
+            Stmt::CallStmt { name, args } => {
+                check_function_call(name, args, functions, scope)?;
+                match name.as_str() {
+                    "push" => {
+                        let arr_name = extract_var_name(&args[0])?;
+                        let arr_type = scope.get(arr_name)
+                            .ok_or(format!("Variable '{}' not found", arr_name))?;
+                        if arr_type == Type::Array {
+                            out.push_str(&format!("{}side_arr_push(&{}, &{}_size, &{}_cap, ", pad, arr_name, arr_name, arr_name));
+                        } else if arr_type == Type::DoubleArray {
+                            out.push_str(&format!("{}side_arr_push_double(&{}, &{}_size, &{}_cap, ", pad, arr_name, arr_name, arr_name));
+                        } else {
+                            return Err("First argument of push must be an array".into());
+                        }
+                        generate_expr(&args[1], out, scope)?;
+                        out.push_str(");\n");
+                    }
+                    "pop" => {
+                        let arr_name = extract_var_name(&args[0])?;
+                        let arr_type = scope.get(arr_name)
+                            .ok_or(format!("Variable '{}' not found", arr_name))?;
+                        if arr_type == Type::Array {
+                            out.push_str(&format!("{}side_arr_pop(&{}, &{}_size, &{}_cap);\n", pad, arr_name, arr_name, arr_name));
+                        } else if arr_type == Type::DoubleArray {
+                            out.push_str(&format!("{}side_arr_pop_double(&{}, &{}_size, &{}_cap);\n", pad, arr_name, arr_name, arr_name));
+                        } else {
+                            return Err("First argument of pop must be an array".into());
+                        }
+                    }
+                    _ => {
+                        let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
+                        out.push_str(&format!("{}{}(", pad, c_name));
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 { out.push_str(", "); }
+                            generate_expr(arg, out, scope)?;
+                        }
+                        out.push_str(");\n");
                     }
                 }
             }
-            _ => Type::Int,
-        };
-
-        if return_type == Type::Array || return_type == Type::DoubleArray {
-            return Err("Array return type not supported".to_string());
         }
+    }
+    Ok(())
+}
 
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected function name".to_string());
-        };
-
-        self.expect(Token::LParen)?;
-        let mut params = vec![];
-        if self.peek() != Some(&Token::RParen) {
-            loop {
-                let param_type = self.parse_type()?;
-                let param_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-                    self.advance();
-                    n
-                } else {
-                    return Err("Expected parameter name".to_string());
-                };
-                params.push(Param { name: param_name, param_type });
-                if self.peek() == Some(&Token::Comma) {
-                    self.advance();
-                } else {
-                    break;
+fn generate_expr(expr: &Expr, out: &mut String, scope: &Scope) -> Result<(), String> {
+    match expr {
+        Expr::Number(n) => out.push_str(&n.to_string()),
+        Expr::DoubleLiteral(d) => out.push_str(&format!("{}", d)),
+        Expr::StringLiteral(s) => out.push_str(&format!("\"{}\"", s)),
+        Expr::Variable(name) => out.push_str(name),
+        Expr::Input(prompt) => out.push_str(&format!("side_input(\"{}\")", prompt)),
+        Expr::Call { name, args } => {
+            match name.as_str() {
+                "len" => {
+                    if args.len() != 1 {
+                        return Err("len requires 1 argument".into());
+                    }
+                    let tp = infer_type(&args[0], scope, &[], None)?;
+                    if tp == Type::Array || tp == Type::DoubleArray {
+                        let arr_name = extract_var_name(&args[0])?;
+                        out.push_str(&format!("{}_size", arr_name));
+                    } else if tp == Type::Str {
+                        out.push_str("strlen(");
+                        generate_expr(&args[0], out, scope)?;
+                        out.push_str(")");
+                    } else {
+                        return Err("len argument must be array or string".into());
+                    }
+                }
+                "time" => out.push_str("side_time()"),
+                "sqrt" | "pow" | "fabs" | "rand" => {
+                    out.push_str(name);
+                    out.push('(');
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        generate_expr(arg, out, scope)?;
+                    }
+                    out.push(')');
+                }
+                "str" => {
+                    if args.len() != 1 { return Err("str() requires 1 argument".into()); }
+                    let tp = infer_type(&args[0], scope, &[], None)?;
+                    if tp == Type::Double {
+                        out.push_str("side_str_double(");
+                    } else {
+                        out.push_str("side_str(");
+                    }
+                    generate_expr(&args[0], out, scope)?;
+                    out.push(')');
+                }
+                "int" => {
+                    out.push_str("atoi(");
+                    generate_expr(&args[0], out, scope)?;
+                    out.push(')');
+                }
+                _ => {
+                    let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
+                    out.push_str(&format!("{}(", c_name));
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 { out.push_str(", "); }
+                        generate_expr(arg, out, scope)?;
+                    }
+                    out.push(')');
                 }
             }
         }
-        self.expect(Token::RParen)?;
-
-        if self.peek() == Some(&Token::Arrow) {
-            self.advance();
-            return_type = self.parse_type()?;
+        Expr::StructLiteral { name, fields } => {
+            out.push_str(&format!("(side_{}){{", name));
+            for (i, f) in fields.iter().enumerate() {
+                if i > 0 { out.push_str(", "); }
+                generate_expr(f, out, scope)?;
+            }
+            out.push('}');
         }
-
-        self.expect(Token::LBrace)?;
-        let body = self.parse_block()?;
-        Ok(Function { name, params, return_type, body })
-    }
-
-    fn parse_block(&mut self) -> Result<Vec<Stmt>, String> {
-        let mut stmts = vec![];
-        while self.peek() != Some(&Token::RBrace) && self.peek().is_some() {
-            stmts.push(self.parse_stmt()?);
+        Expr::ArrayLiteral(elements) => {
+            out.push_str("{");
+            for (i, e) in elements.iter().enumerate() {
+                if i > 0 { out.push_str(", "); }
+                generate_expr(e, out, scope)?;
+            }
+            out.push('}');
         }
-        self.expect(Token::RBrace)?;
-        Ok(stmts)
+        Expr::Index { array, index } => {
+            generate_expr(array, out, scope)?;
+            out.push('[');
+            generate_expr(index, out, scope)?;
+            out.push(']');
+        }
+        Expr::FieldAccess { expr, field } => {
+            generate_expr(expr, out, scope)?;
+            out.push('.');
+            out.push_str(field);
+        }
+        Expr::Binary { left, op, right } => {
+            out.push('(');
+            generate_expr(left, out, scope)?;
+            let op_str = match op {
+                BinOp::Add => " + ",
+                BinOp::Sub => " - ",
+                BinOp::Mul => " * ",
+                BinOp::Div => " / ",
+                BinOp::Eq => " == ",
+                BinOp::NotEq => " != ",
+                BinOp::Less => " < ",
+                BinOp::Greater => " > ",
+                BinOp::LessEq => " <= ",
+                BinOp::GreaterEq => " >= ",
+                BinOp::And => " && ",
+                BinOp::Or => " || ",
+            };
+            out.push_str(op_str);
+            generate_expr(right, out, scope)?;
+            out.push(')');
+        }
+        Expr::Unary { op, expr } => {
+            match op {
+                UnaryOp::Not => {
+                    out.push_str("!(");
+                    generate_expr(expr, out, scope)?;
+                    out.push(')');
+                }
+                UnaryOp::Neg => {
+                    out.push_str("-(");
+                    generate_expr(expr, out, scope)?;
+                    out.push(')');
+                }
+            }
+        }
     }
+    Ok(())
+}
 
-    // -------- Типы ----------
-    fn parse_type(&mut self) -> Result<Type, String> {
-        match self.peek() {
-            Some(Token::Int) => {
-                self.advance();
-                if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
-                    self.expect(Token::RBracket)?;
+// ---------- Вспомогательные функции для типов ----------
+fn type_compatible(expected: &Type, actual: &Type) -> bool {
+    match (expected, actual) {
+        (Type::Int, Type::Int) => true,
+        (Type::Double, Type::Double) => true,
+        (Type::Double, Type::Int) => true,
+        (Type::Str, Type::Str) => true,
+        (Type::Array, Type::Array) => true,
+        (Type::DoubleArray, Type::DoubleArray) => true,
+        (Type::Array, Type::DoubleArray) => false,
+        (Type::DoubleArray, Type::Array) => false,
+        (Type::Struct(a), Type::Struct(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn infer_type(expr: &Expr, scope: &Scope, functions: &[Function], expected: Option<&Type>) -> Result<Type, String> {
+    match expr {
+        Expr::Number(_) => Ok(Type::Int),
+        Expr::DoubleLiteral(_) => Ok(Type::Double),
+        Expr::StringLiteral(_) => Ok(Type::Str),
+        Expr::Variable(name) => scope.get(name)
+            .ok_or(format!("Variable '{}' not declared", name)),
+        Expr::Input(_) => Ok(Type::Int),
+        Expr::Call { name, args: _ } => match name.as_str() {
+            "len" => Ok(Type::Int),
+            "time" => Ok(Type::Int),
+            "sqrt" | "pow" | "fabs" => Ok(Type::Double),
+            "rand" => Ok(Type::Int),
+            "str" => Ok(Type::Str),
+            "int" => Ok(Type::Int),
+            _ => {
+                let func = functions.iter().find(|f| f.name == *name)
+                    .ok_or(format!("Function '{}' not defined", name))?;
+                Ok(func.return_type.clone())
+            }
+        },
+        Expr::StructLiteral { name, .. } => Ok(Type::Struct(name.clone())),
+        Expr::ArrayLiteral(elements) => {
+            if elements.is_empty() {
+                if let Some(exp) = expected {
+                    match exp {
+                        Type::DoubleArray => return Ok(Type::DoubleArray),
+                        Type::Array => return Ok(Type::Array),
+                        _ => return Ok(Type::Array),
+                    }
+                } else {
                     return Ok(Type::Array);
                 }
+            }
+            let first_type = infer_type(&elements[0], scope, functions, None)?;
+            if first_type == Type::Double {
+                Ok(Type::DoubleArray)
+            } else {
+                Ok(Type::Array)
+            }
+        }
+        Expr::Index { array, .. } => {
+            let arr_type = infer_type(array, scope, functions, None)?;
+            match arr_type {
+                Type::Array => Ok(Type::Int),
+                Type::DoubleArray => Ok(Type::Double),
+                _ => Err("Indexing non-array".into()),
+            }
+        }
+        Expr::FieldAccess { .. } => Ok(Type::Int),
+        Expr::Binary { left, op: _, right } => {
+            let tl = infer_type(left, scope, functions, None)?;
+            let tr = infer_type(right, scope, functions, None)?;
+            if tl == Type::Double || tr == Type::Double {
+                Ok(Type::Double)
+            } else {
                 Ok(Type::Int)
             }
-            Some(Token::Double) => {
-                self.advance();
-                if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
-                    self.expect(Token::RBracket)?;
-                    return Ok(Type::DoubleArray);
-                }
-                Ok(Type::Double)
-            }
-            Some(Token::Str) => {
-                self.advance();
-                Ok(Type::Str)
-            }
-            Some(Token::Identifier(name)) => {
-                let n = name.clone();
-                self.advance();
-                Ok(Type::Struct(n))
-            }
-            _ => Ok(Type::Int),
         }
-    }
-
-    // -------- Операторы ----------
-    fn parse_stmt(&mut self) -> Result<Stmt, String> {
-        match self.peek() {
-            Some(Token::Let) => self.parse_let(),
-            Some(Token::If) => self.parse_if(),
-            Some(Token::While) => self.parse_while(),
-            Some(Token::For) => self.parse_for(),
-            Some(Token::Return) => self.parse_return(),
-            Some(Token::Break) => { self.advance(); Ok(Stmt::Break) }
-            Some(Token::Continue) => { self.advance(); Ok(Stmt::Continue) }
-            Some(Token::Io) => self.parse_io_print(),
-            Some(Token::Identifier(_)) => self.parse_assign_or_call_stmt(),
-            other => Err(format!("Unexpected token at statement start: {:?}", other)),
-        }
-    }
-
-    fn parse_let(&mut self) -> Result<Stmt, String> {
-        self.expect(Token::Let)?;
-
-        let first = self.peek().cloned();
-        let var_type = match first {
-            Some(Token::Int) => {
-                self.advance();
-                if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
-                    self.expect(Token::RBracket)?;
-                    Some(Type::Array)
-                } else {
-                    Some(Type::Int)
-                }
-            }
-            Some(Token::Double) => {
-                self.advance();
-                if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
-                    self.expect(Token::RBracket)?;
-                    Some(Type::DoubleArray)
-                } else {
-                    Some(Type::Double)
-                }
-            }
-            Some(Token::Str) => {
-                self.advance();
-                Some(Type::Str)
-            }
-            Some(Token::Identifier(ref name1)) => {
-                let save_pos = self.pos;
-                self.advance();
-                let is_type = match self.peek() {
-                    Some(Token::Identifier(_)) => true,
-                    Some(Token::Equals) => false,
-                    _ => {
-                        self.pos = save_pos;
-                        return Err("Expected variable name or type".to_string());
-                    }
-                };
-                if is_type {
-                    let type_name = name1.clone();
-                    let var_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-                        self.advance();
-                        n
-                    } else {
-                        return Err("Expected variable name after type".to_string());
-                    };
-                    self.expect(Token::Equals)?;
-                    let value = self.parse_expr()?;
-                    return Ok(Stmt::Let { name: var_name, var_type: Some(Type::Struct(type_name)), value });
-                } else {
-                    let var_name = name1.clone();
-                    self.expect(Token::Equals)?;
-                    let value = self.parse_expr()?;
-                    return Ok(Stmt::Let { name: var_name, var_type: None, value });
-                }
-            }
-            _ => None,
-        };
-
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected variable name after 'let'".to_string());
-        };
-
-        self.expect(Token::Equals)?;
-        let value = self.parse_expr()?;
-        Ok(Stmt::Let { name, var_type, value })
-    }
-
-    fn parse_assign_or_call_stmt(&mut self) -> Result<Stmt, String> {
-        let name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-            self.advance();
-            n
-        } else {
-            return Err("Expected identifier".to_string());
-        };
-
-        if self.peek() == Some(&Token::LBracket) {
-            self.expect(Token::LBracket)?;
-            let index = self.parse_expr()?;
-            self.expect(Token::RBracket)?;
-            self.expect(Token::Equals)?;
-            let value = self.parse_expr()?;
-            return Ok(Stmt::AssignIndex { name, index, value });
-        }
-
-        if self.peek() == Some(&Token::LParen) {
-            let args = self.parse_call_args()?;
-            if self.peek() == Some(&Token::Equals) {
-                self.expect(Token::Equals)?;
-                let value = Expr::Call { name: name.clone(), args };
-                Ok(Stmt::Assign { name: name.clone(), value })
-            } else {
-                Ok(Stmt::CallStmt { name, args })
-            }
-        } else {
-            self.expect(Token::Equals)?;
-            let value = self.parse_expr()?;
-            Ok(Stmt::Assign { name, value })
-        }
-    }
-
-    fn parse_call_args(&mut self) -> Result<Vec<Expr>, String> {
-        self.expect(Token::LParen)?;
-        let mut args = vec![];
-        if self.peek() != Some(&Token::RParen) {
-            loop {
-                args.push(self.parse_expr()?);
-                if self.peek() == Some(&Token::Comma) {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-        self.expect(Token::RParen)?;
-        Ok(args)
-    }
-
-    fn parse_if(&mut self) -> Result<Stmt, String> {
-        self.expect(Token::If)?;
-        let condition = self.parse_expr()?;
-        self.expect(Token::LBrace)?;
-        let then_body = self.parse_block()?;
-        let else_body = if self.peek() == Some(&Token::Else) {
-            self.advance();
-            if self.peek() == Some(&Token::If) {
-                let else_if_stmt = self.parse_if()?;
-                Some(vec![else_if_stmt])
-            } else {
-                self.expect(Token::LBrace)?;
-                let else_stmts = self.parse_block()?;
-                Some(else_stmts)
-            }
-        } else {
-            None
-        };
-        Ok(Stmt::If { condition, then_body, else_body })
-    }
-
-    fn parse_while(&mut self) -> Result<Stmt, String> {
-        self.expect(Token::While)?;
-        let condition = self.parse_expr()?;
-        self.expect(Token::LBrace)?;
-        let body = self.parse_block()?;
-        Ok(Stmt::While { condition, body })
-    }
-
-    fn parse_for(&mut self) -> Result<Stmt, String> {
-    self.expect(Token::For)?;
-    let var_name = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-        self.advance();
-        n
-    } else {
-        return Err("Expected loop variable name in 'for'".to_string());
-    };
-    self.expect(Token::Equals)?;
-    let start = self.parse_expr()?;
-    self.expect(Token::Comma)?;
-    let condition = self.parse_expr()?;
-    self.expect(Token::Comma)?;
-    let step_var = if let Some(Token::Identifier(n)) = self.peek().cloned() {
-        self.advance();
-        n
-    } else {
-        return Err("Expected step variable in for".to_string());
-    };
-    self.expect(Token::Equals)?;
-    let step_value = self.parse_expr()?;
-    let _step = Stmt::Assign { name: step_var.clone(), value: step_value.clone() };
-    self.expect(Token::LBrace)?;
-    let body = self.parse_block()?;  // <-- убрал mut
-    Ok(Stmt::For { var_name, start, condition, step: step_value, body })
-}
-
-    fn parse_return(&mut self) -> Result<Stmt, String> {
-        self.expect(Token::Return)?;
-        let expr = self.parse_expr()?;
-        Ok(Stmt::Return(expr))
-    }
-
-    fn parse_io_print(&mut self) -> Result<Stmt, String> {
-        self.expect(Token::Io)?;
-        self.expect(Token::Dot)?;
-        self.expect(Token::Print)?;
-        self.expect(Token::LParen)?;
-        let mut args = vec![];
-        if self.peek() != Some(&Token::RParen) {
-            loop {
-                args.push(self.parse_expr()?);
-                if self.peek() == Some(&Token::Comma) {
-                    self.advance();
-                } else {
-                    break;
-                }
-            }
-        }
-        self.expect(Token::RParen)?;
-        Ok(Stmt::IoPrint(args))
-    }
-
-    // -------- Выражения ----------
-    fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_or()
-    }
-
-    fn parse_or(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_and()?;
-        while self.peek() == Some(&Token::Or) {
-            self.advance();
-            let right = self.parse_and()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right) };
-        }
-        Ok(left)
-    }
-
-    fn parse_and(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_comparison()?;
-        while self.peek() == Some(&Token::And) {
-            self.advance();
-            let right = self.parse_comparison()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right) };
-        }
-        Ok(left)
-    }
-
-    fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_addition()?;
-        while let Some(op) = self.peek() {
-            let binop = match op {
-                Token::EqualEqual => BinOp::Eq,
-                Token::NotEqual => BinOp::NotEq,
-                Token::Less => BinOp::Less,
-                Token::Greater => BinOp::Greater,
-                Token::LessEqual => BinOp::LessEq,
-                Token::GreaterEqual => BinOp::GreaterEq,
-                _ => break,
-            };
-            self.advance();
-            let right = self.parse_addition()?;
-            left = Expr::Binary { left: Box::new(left), op: binop, right: Box::new(right) };
-        }
-        Ok(left)
-    }
-
-    fn parse_addition(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_multiplication()?;
-        while let Some(op) = self.peek() {
-            match op {
-                Token::Plus => {
-                    self.advance();
-                    let right = self.parse_multiplication()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Add, right: Box::new(right) };
-                }
-                Token::Minus => {
-                    self.advance();
-                    let right = self.parse_multiplication()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Sub, right: Box::new(right) };
-                }
-                _ => break,
-            }
-        }
-        Ok(left)
-    }
-
-    fn parse_multiplication(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_unary()?;
-        while let Some(op) = self.peek() {
-            match op {
-                Token::Star => {
-                    self.advance();
-                    let right = self.parse_unary()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Mul, right: Box::new(right) };
-                }
-                Token::Slash => {
-                    self.advance();
-                    let right = self.parse_unary()?;
-                    left = Expr::Binary { left: Box::new(left), op: BinOp::Div, right: Box::new(right) };
-                }
-                _ => break,
-            }
-        }
-        Ok(left)
-    }
-
-    fn parse_unary(&mut self) -> Result<Expr, String> {
-        if self.peek() == Some(&Token::Not) {
-            self.advance();
-            let expr = self.parse_unary()?;
-            return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) });
-        }
-        if self.peek() == Some(&Token::Minus) {
-            self.advance();
-            let expr = self.parse_unary()?;
-            return Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(expr) });
-        }
-        self.parse_postfix()
-    }
-
-    fn parse_postfix(&mut self) -> Result<Expr, String> {
-        let mut expr = self.parse_primary()?;
-        loop {
-            match self.peek() {
-                Some(Token::LBracket) => {
-                    self.advance();
-                    let index = self.parse_expr()?;
-                    self.expect(Token::RBracket)?;
-                    expr = Expr::Index { array: Box::new(expr), index: Box::new(index) };
-                }
-                Some(Token::Dot) => {
-                    self.advance();
-                    let field = if let Some(Token::Identifier(f)) = self.peek().cloned() {
-                        self.advance();
-                        f
-                    } else {
-                        return Err("Expected field name after '.'".to_string());
-                    };
-                    expr = Expr::FieldAccess { expr: Box::new(expr), field };
-                }
-                _ => break,
-            }
-        }
-        Ok(expr)
-    }
-
-      fn parse_primary(&mut self) -> Result<Expr, String> {
-    match self.peek().cloned() {
-        Some(Token::Number(n)) => { self.advance(); Ok(Expr::Number(n)) }
-        Some(Token::DoubleLiteral(d)) => { self.advance(); Ok(Expr::DoubleLiteral(d)) }
-        Some(Token::StringLiteral(s)) => { self.advance(); Ok(Expr::StringLiteral(s)) }
-        Some(Token::Identifier(name)) => {
-            self.advance();
-            if self.peek() == Some(&Token::LParen) {
-                let args = self.parse_call_args()?;
-                Ok(Expr::Call { name, args })
-            } else if self.peek() == Some(&Token::LBrace) {
-                // Struct literal: Name { field1, field2, ... }
-                self.parse_struct_literal(name)
-            } else {
-                Ok(Expr::Variable(name))
-            }
-        }
-        Some(Token::LBracket) => {
-            self.advance();
-            let mut elements = vec![];
-            if self.peek() != Some(&Token::RBracket) {
-                loop {
-                    elements.push(self.parse_expr()?);
-                    if self.peek() == Some(&Token::Comma) {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
-            }
-            self.expect(Token::RBracket)?;
-            Ok(Expr::ArrayLiteral(elements))
-        }
-        Some(Token::Io) => {
-            self.advance();
-            self.expect(Token::Dot)?;
-            self.expect(Token::Input)?;
-            self.expect(Token::LParen)?;
-            let prompt = if let Some(Token::StringLiteral(s)) = self.peek().cloned() {
-                self.advance();
-                s
-            } else {
-                return Err("Expected prompt string for io.input".to_string());
-            };
-            self.expect(Token::RParen)?;
-            Ok(Expr::Input(prompt))
-        }
-        Some(Token::Str) | Some(Token::Int) => {
-            let name = if matches!(self.peek(), Some(Token::Str)) { "str".to_string() } else { "int".to_string() };
-            self.advance();
-            if self.peek() == Some(&Token::LParen) {
-                let args = self.parse_call_args()?;
-                Ok(Expr::Call { name, args })
-            } else {
-                Err(format!("Expected '(' after '{}'", name))
-            }
-        }
-        Some(Token::LParen) => {
-            self.advance();
-            let expr = self.parse_expr()?;
-            self.expect(Token::RParen)?;
-            Ok(expr)
-        }
-        other => Err(format!("Unexpected token in expression: {:?}", other)),
+        Expr::Unary { op: _, expr } => infer_type(expr, scope, functions, None),
     }
 }
 
-fn parse_struct_literal(&mut self, name: String) -> Result<Expr, String> {
-    self.expect(Token::LBrace)?;
-    let mut fields = vec![];
-    if self.peek() != Some(&Token::RBrace) {
-        loop {
-            let field_expr = self.parse_expr()?;
-            fields.push(field_expr);
-            if self.peek() == Some(&Token::Comma) {
-                self.advance();
-            } else {
-                break;
+fn type_to_c(tp: &Type) -> String {
+    match tp {
+        Type::Int => "int".to_string(),
+        Type::Double => "double".to_string(),
+        Type::Str => "const char*".to_string(),
+        Type::Array => "int*".to_string(),
+        Type::DoubleArray => "double*".to_string(),
+        Type::Struct(name) => format!("side_{}", name),
+    }
+}
+
+fn check_function_call(name: &str, args: &[Expr], functions: &[Function], scope: &Scope) -> Result<(), String> {
+    match name {
+        "push" | "pop" => {
+            let arr_name = extract_var_name(&args[0])?;
+            let tp = scope.get(arr_name).ok_or(format!("Variable '{}' not found", arr_name))?;
+            if tp != Type::Array && tp != Type::DoubleArray {
+                return Err(format!("First argument of '{}' must be an array", name));
             }
+            if name == "push" && args.len() != 2 {
+                return Err("push requires 2 arguments".into());
+            }
+            if name == "pop" && args.len() != 1 {
+                return Err("pop requires 1 argument".into());
+            }
+            if name == "push" {
+                let expected_elem = if tp == Type::Array { Type::Int } else { Type::Double };
+                let elem_type = infer_type(&args[1], scope, functions, Some(&expected_elem))?;
+                if !type_compatible(&expected_elem, &elem_type) {
+                    return Err(format!("push: expected {} element, got {:?}", if tp == Type::Array { "int" } else { "double" }, elem_type));
+                }
+            }
+            return Ok(());
+        }
+        "len" => {
+            if args.len() != 1 { return Err("len requires 1 argument".into()); }
+            let tp = infer_type(&args[0], scope, functions, None)?;
+            if tp != Type::Array && tp != Type::DoubleArray && tp != Type::Str {
+                return Err("len argument must be array or string".into());
+            }
+            return Ok(());
+        }
+        "time" | "rand" => {
+            if !args.is_empty() { return Err(format!("'{}' takes no arguments", name)); }
+            return Ok(());
+        }
+        "sqrt" | "fabs" => {
+            if args.len() != 1 { return Err(format!("'{}' requires 1 argument", name)); }
+            let tp = infer_type(&args[0], scope, functions, None)?;
+            if tp != Type::Int && tp != Type::Double { return Err(format!("'{}' argument must be numeric", name)); }
+            return Ok(());
+        }
+        "pow" => {
+            if args.len() != 2 { return Err("pow requires 2 arguments".into()); }
+            for a in args {
+                let tp = infer_type(a, scope, functions, None)?;
+                if tp != Type::Int && tp != Type::Double { return Err("pow arguments must be numeric".into()); }
+            }
+            return Ok(());
+        }
+        "str" | "int" => {
+            if args.len() != 1 { return Err(format!("'{}' requires 1 argument", name)); }
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    // Пользовательские функции
+    let func = functions.iter().find(|f| f.name == name)
+        .ok_or(format!("Function '{}' not defined", name))?;
+    if func.params.len() != args.len() {
+        return Err(format!("Function '{}' expects {} arguments, got {}", name, func.params.len(), args.len()));
+    }
+    for (param, arg) in func.params.iter().zip(args.iter()) {
+        let actual = infer_type(arg, scope, functions, Some(&param.param_type))?;
+        if !type_compatible(&param.param_type, &actual) {
+            return Err(format!("Argument type mismatch in '{}': parameter '{}' expects {:?}, got {:?}",
+                name, param.name, param.param_type, actual));
         }
     }
-    self.expect(Token::RBrace)?;
-    Ok(Expr::StructLiteral { name, fields })
+    Ok(())
+}
+
+fn extract_var_name(expr: &Expr) -> Result<&str, String> {
+    if let Expr::Variable(name) = expr {
+        Ok(name.as_str())
+    } else {
+        Err("Expected a variable name".into())
+    }
 }
