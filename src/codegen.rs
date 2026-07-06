@@ -20,28 +20,29 @@ pub fn generate(program: &Program) -> Result<String, String> {
     let mut out = String::new();
     out.push_str("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n#include <time.h>\n\n");
 
+    // Генерация констант
     for c in &program.constants {
-        let c_type = match &c.value { Expr::DoubleLiteral(_) => "const double", Expr::StringLiteral(_) => "const char*", _ => "const int" };
+        let c_type = match &c.value {
+            Expr::DoubleLiteral(_) => "const double",
+            Expr::StringLiteral(_) => "const char*",
+            _ => "const int",
+        };
         out.push_str(&format!("{} {} = ", c_type, c.name));
         generate_expr(&c.value, &mut out, &Scope::new())?;
         out.push_str(";\n");
     }
 
+    // Генерация структур
     for s in &program.structs {
         out.push_str(&format!("typedef struct {{\n"));
         for f in &s.fields {
-            match f.field_type {
-                Type::Int => out.push_str(&format!("    int {};\n", f.name)),
-                Type::Double => out.push_str(&format!("    double {};\n", f.name)),
-                Type::Str => out.push_str(&format!("    const char* {};\n", f.name)),
-                Type::Array => out.push_str(&format!("    int* {};\n", f.name)),
-                Type::DoubleArray => out.push_str(&format!("    double* {};\n", f.name)),
-                Type::Struct(ref name) => out.push_str(&format!("    side_{} {};\n", name, f.name)),
-            }
+            let type_str = type_to_c(&f.field_type);
+            out.push_str(&format!("    {} {};\n", type_str, f.name));
         }
         out.push_str(&format!("}} side_{};\n\n", s.name));
     }
 
+    // Встроенные функции (оставляем как есть)
     out.push_str(r#"
 void side_arr_push(int** arr, int* size, int* cap, int value) {
     if (*size >= *cap) { *cap = (*cap == 0) ? 2 : (*cap) * 2; *arr = realloc(*arr, (*cap) * sizeof(int)); }
@@ -69,7 +70,7 @@ char* side_str(int n) { static char buf[20]; sprintf(buf, "%d", n); return buf; 
 char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); return buf; }
 "#);
 
-    // Генерируем сначала все функции, кроме main, чтобы main могла их вызывать
+    // Собираем функции
     let mut non_main = Vec::new();
     let mut mains = Vec::new();
     for func in &program.functions {
@@ -79,20 +80,17 @@ char* side_str_double(double n) { static char buf[30]; sprintf(buf, "%f", n); re
             non_main.push(func);
         }
     }
+
     for func in non_main.iter().chain(mains.iter()) {
         let c_name = if func.name == "main" { "side_main".to_string() } else { format!("side_{}", func.name) };
-        let params_str = func.params.iter().map(|p| match p.param_type {
-            Type::Int => format!("int {}", p.name),
-            Type::Double => format!("double {}", p.name),
-            Type::Str => format!("const char* {}", p.name),
-            Type::Array => format!("int* {}", p.name),
-            Type::DoubleArray => format!("double* {}", p.name),
-            Type::Struct(ref name) => format!("side_{} {}", name, p.name),
-        }).collect::<Vec<_>>().join(", ");
+        let return_c = type_to_c(&func.return_type);
+        let params_str = func.params.iter()
+            .map(|p| format!("{} {}", type_to_c(&p.param_type), p.name))
+            .collect::<Vec<_>>()
+            .join(", ");
 
-        out.push_str(&format!("{} {}(", type_to_c(&func.return_type), c_name));
-        out.push_str(&params_str);
-        out.push_str(") {\n");
+        out.push_str(&format!("{} {}({})", return_c, c_name, params_str));
+        out.push_str(" {\n");
 
         let mut scope = Scope::new();
         for p in &func.params { scope.declare(&p.name, p.param_type.clone()); }
