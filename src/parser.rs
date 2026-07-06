@@ -562,69 +562,69 @@ fn parse_import(&mut self) -> Result<String, String> {
     }
 
       fn parse_primary(&mut self) -> Result<Expr, String> {
-        match self.peek().cloned() {
-            Some(Token::Number(n)) => { self.advance(); Ok(Expr::Number(n)) }
-            Some(Token::DoubleLiteral(d)) => { self.advance(); Ok(Expr::DoubleLiteral(d)) }
-            Some(Token::StringLiteral(s)) => { self.advance(); Ok(Expr::StringLiteral(s)) }
-            Some(Token::Identifier(name)) => {
-                self.advance();
-                if self.peek() == Some(&Token::LParen) {
-                    let args = self.parse_call_args()?;
-                    Ok(Expr::Call { name, args })
-                } else {
-                    Ok(Expr::Variable(name))
-                }
+    match self.peek().cloned() {
+        Some(Token::Number(n)) => { self.advance(); Ok(Expr::Number(n)) }
+        Some(Token::DoubleLiteral(d)) => { self.advance(); Ok(Expr::DoubleLiteral(d)) }
+        Some(Token::StringLiteral(s)) => { self.advance(); Ok(Expr::StringLiteral(s)) }
+        Some(Token::Identifier(name)) => {
+            self.advance();
+            if self.peek() == Some(&Token::LParen) {
+                let args = self.parse_call_args()?;
+                Ok(Expr::Call { name, args })
+            } else if self.peek() == Some(&Token::LBrace) {
+                // Struct literal: Name { field1, field2, ... }
+                self.parse_struct_literal(name)
+            } else {
+                Ok(Expr::Variable(name))
             }
-            Some(Token::LBracket) => {
-                self.advance();
-                let mut elements = vec![];
-                if self.peek() != Some(&Token::RBracket) {
-                    loop {
-                        elements.push(self.parse_expr()?);
-                        if self.peek() == Some(&Token::Comma) {
-                            self.advance();
-                        } else {
-                            break;
-                        }
+        }
+        Some(Token::LBracket) => {
+            self.advance();
+            let mut elements = vec![];
+            if self.peek() != Some(&Token::RBracket) {
+                loop {
+                    elements.push(self.parse_expr()?);
+                    if self.peek() == Some(&Token::Comma) {
+                        self.advance();
+                    } else {
+                        break;
                     }
                 }
-                self.expect(Token::RBracket)?;
-                Ok(Expr::ArrayLiteral(elements))
             }
-            Some(Token::Io) => {
-                self.advance();
-                self.expect(Token::Dot)?;
-                self.expect(Token::Input)?;
-                self.expect(Token::LParen)?;
-                let prompt = if let Some(Token::StringLiteral(s)) = self.peek().cloned() {
-                    self.advance();
-                    s
-                } else {
-                    return Err("Expected prompt string for io.input".to_string());
-                };
-                self.expect(Token::RParen)?;
-                Ok(Expr::Input(prompt))
-            }
-            // ----- ДОБАВЛЕННЫЙ БЛОК -----
-            Some(Token::Str) | Some(Token::Int) => {
-                let name = if matches!(self.peek(), Some(Token::Str)) { "str".to_string() } else { "int".to_string() };
-                self.advance();
-                if self.peek() == Some(&Token::LParen) {
-                    let args = self.parse_call_args()?;
-                    Ok(Expr::Call { name, args })
-                } else {
-                    Err(format!("Expected '(' after '{}'", name))
-                }
-            }
-            // ----------------------------
-            Some(Token::LParen) => {
-                self.advance();
-                let expr = self.parse_expr()?;
-                self.expect(Token::RParen)?;
-                Ok(expr)
-            }
-            other => Err(format!("Unexpected token in expression: {:?}", other)),
+            self.expect(Token::RBracket)?;
+            Ok(Expr::ArrayLiteral(elements))
         }
+        Some(Token::Io) => {
+            self.advance();
+            self.expect(Token::Dot)?;
+            self.expect(Token::Input)?;
+            self.expect(Token::LParen)?;
+            let prompt = if let Some(Token::StringLiteral(s)) = self.peek().cloned() {
+                self.advance();
+                s
+            } else {
+                return Err("Expected prompt string for io.input".to_string());
+            };
+            self.expect(Token::RParen)?;
+            Ok(Expr::Input(prompt))
+        }
+        Some(Token::Str) | Some(Token::Int) => {
+            let name = if matches!(self.peek(), Some(Token::Str)) { "str".to_string() } else { "int".to_string() };
+            self.advance();
+            if self.peek() == Some(&Token::LParen) {
+                let args = self.parse_call_args()?;
+                Ok(Expr::Call { name, args })
+            } else {
+                Err(format!("Expected '(' after '{}'", name))
+            }
+        }
+        Some(Token::LParen) => {
+            self.advance();
+            let expr = self.parse_expr()?;
+            self.expect(Token::RParen)?;
+            Ok(expr)
+        }
+        other => Err(format!("Unexpected token in expression: {:?}", other)),
     }
 }
 
