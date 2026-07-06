@@ -1,3 +1,4 @@
+// ast.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
@@ -9,7 +10,6 @@ impl Span {
         Self { start, end }
     }
 
-    /// Объединяет два спана в один (от начала первого до конца второго)
     pub fn merge(&self, other: &Self) -> Self {
         Self {
             start: self.start.min(other.start),
@@ -50,6 +50,7 @@ pub struct Field {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
+    pub struct_name: Option<String>, // Some(StructName) если метод
     pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Vec<Stmt>,
@@ -131,6 +132,12 @@ pub enum Expr {
     Input(String, Span),
     Call {
         name: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
+    MethodCall {
+        instance: Box<Expr>,
+        method: String,
         args: Vec<Expr>,
         span: Span,
     },
