@@ -168,6 +168,12 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -181,4 +187,26 @@ pub enum BinOp {
 pub enum UnaryOp {
     Not,
     Neg,
+}
+
+// Реализация метода span() для Expr
+impl Expr {
+    pub fn span(&self) -> Span {
+        match self {
+            Expr::Number(_, span) => *span,
+            Expr::DoubleLiteral(_, span) => *span,
+            Expr::StringLiteral(_, span) => *span,
+            Expr::Variable(_, span) => *span,
+            Expr::Input(_, span) => *span,
+            Expr::Call { span, .. } => *span,
+            Expr::MethodCall { span, .. } => *span,
+            Expr::StructLiteral { span, .. } => *span,
+            Expr::ArrayLiteral(_, span) => *span,
+            Expr::Index { span, .. } => *span,
+            Expr::FieldAccess { span, .. } => *span,
+            Expr::Binary { span, .. } => *span,
+            Expr::Unary { span, .. } => *span,
+            Expr::Ternary { span, .. } => *span,
+        }
+    }
 }
