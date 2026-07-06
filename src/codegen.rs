@@ -465,7 +465,7 @@ fn infer_type(expr: &Expr, scope: &Scope, functions: &[Function], expected: Opti
         Expr::Variable(name) => scope.get(name)
             .ok_or(format!("Variable '{}' not declared", name)),
         Expr::Input(_) => Ok(Type::Int),
-        Expr::Call { name, args } => match name.as_str() {
+        Expr::Call { name, args: _ } => match name.as_str() {
             "len" => Ok(Type::Int),
             "time" => Ok(Type::Int),
             "sqrt" | "pow" | "fabs" => Ok(Type::Double),
@@ -481,18 +481,16 @@ fn infer_type(expr: &Expr, scope: &Scope, functions: &[Function], expected: Opti
         Expr::StructLiteral { name, .. } => Ok(Type::Struct(name.clone())),
         Expr::ArrayLiteral(elements) => {
             if elements.is_empty() {
-                // Пустой массив: если есть ожидаемый тип, используем его
                 if let Some(exp) = expected {
                     match exp {
                         Type::DoubleArray => return Ok(Type::DoubleArray),
                         Type::Array => return Ok(Type::Array),
-                        _ => return Ok(Type::Array), // по умолчанию int[]
+                        _ => return Ok(Type::Array),
                     }
                 } else {
-                    return Ok(Type::Array); // int[] по умолчанию
+                    return Ok(Type::Array);
                 }
             }
-            // Непустой массив – проверяем первый элемент
             let first_type = infer_type(&elements[0], scope, functions, None)?;
             if first_type == Type::Double {
                 Ok(Type::DoubleArray)
