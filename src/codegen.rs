@@ -523,14 +523,14 @@ fn infer_type(expr: &Expr, scope: &Scope, functions: &[Function], expected: Opti
     }
 }
 
-fn type_to_c(tp: &Type) -> &str {
+fn type_to_c(tp: &Type) -> String {
     match tp {
-        Type::Int => "int",
-        Type::Double => "double",
-        Type::Str => "const char*",
-        Type::Array => "int*",
-        Type::DoubleArray => "double*",
-        Type::Struct(_) => "int",
+        Type::Int => "int".to_string(),
+        Type::Double => "double".to_string(),
+        Type::Str => "const char*".to_string(),
+        Type::Array => "int*".to_string(),
+        Type::DoubleArray => "double*".to_string(),
+        Type::Struct(name) => format!("side_{}", name),
     }
 }
 
