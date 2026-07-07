@@ -117,7 +117,7 @@ char* side_str_concat(const char* a, const char* b) {
 }
 "#);
 
-    // Генерируем функции (включая методы)
+    // Генерируем функции (включая методы и модульные)
     let mut non_main = Vec::new();
     let mut mains = Vec::new();
     for func in &program.functions {
@@ -129,7 +129,9 @@ char* side_str_concat(const char* a, const char* b) {
     }
 
     for func in non_main.iter().chain(mains.iter()) {
-        let c_name = if let Some(ref struct_name) = func.struct_name {
+        let c_name = if let Some(ref mod_name) = func.module_name {
+            format!("side_{}_{}", mod_name, func.name)
+        } else if let Some(ref struct_name) = func.struct_name {
             format!("side_{}_{}", struct_name, func.name)
         } else if func.name == "main" {
             "side_main".to_string()
@@ -206,10 +208,8 @@ fn generate_stmts(
                     None => actual_type.clone(),
                 };
 
-                // ---- Статический массив ----
                 if let Type::Array { size: Some(size), elem } = &final_type {
                     let elem_c = type_to_c(&elem);
-                    // Если инициализация – литерал массива
                     if let Expr::ArrayLiteral(elems, _) = value {
                         out.push_str(&format!("{}{} {}[{}] = {{", pad, elem_c, name, size));
                         for (i, e) in elems.iter().enumerate() {
@@ -218,12 +218,9 @@ fn generate_stmts(
                         }
                         out.push_str("};\n");
                     } else {
-                        // Без инициализации
                         out.push_str(&format!("{}{} {}[{}];\n", pad, elem_c, name, size));
                     }
-                }
-                // ---- Динамический массив ----
-                else if let Type::Array { size: None, elem } = &final_type {
+                } else if let Type::Array { size: None, elem } = &final_type {
                     let elem_c = type_to_c(&elem);
                     out.push_str(&format!("{}{}* {} = NULL;\n", pad, elem_c, name));
                     out.push_str(&format!("{}int {}_size = 0;\n", pad, name));
@@ -248,9 +245,7 @@ fn generate_stmts(
                             out.push_str(&format!("{}}}\n", pad));
                         }
                     }
-                }
-                // ---- Обычный тип (не массив) ----
-                else {
+                } else {
                     let c_type = type_to_c(&final_type);
                     out.push_str(&format!("{}{} {} = ", pad, c_type, name));
                     generate_expr(value, out, scope, functions, src_info)?;
@@ -259,7 +254,6 @@ fn generate_stmts(
 
                 scope.declare(name, final_type);
             }
-            // -------- Остальные операторы (без изменений) ----------
             Stmt::Assign { name, value, span } => {
                 let var_type = scope.get(name)
                     .ok_or(src_info.format_error(span, &format!("Variable '{}' not declared in this scope", name)))?;
@@ -409,6 +403,9 @@ fn generate_stmts(
                             if let Some(ref _struct_name) = f.struct_name {
                                 return Err(src_info.format_error(span, &format!("Method '{}' must be called with dot syntax", name)));
                             }
+                            if let Some(ref _mod_name) = f.module_name {
+                                return Err(src_info.format_error(span, &format!("Module function '{}' must be called with module prefix", name)));
+                            }
                         }
                         let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
                         out.push_str(&format!("{}{}(", pad, c_name));
@@ -446,7 +443,6 @@ fn generate_expr(
                     }
                     let tp = infer_type(&args[0], scope, functions, None, src_info, span)?;
                     if let Type::Array { elem: _, size } = tp {
-                        // Для динамического массива – size переменная, для статического – константа
                         if let Some(s) = size {
                             out.push_str(&s.to_string());
                         } else {
@@ -490,11 +486,10 @@ fn generate_expr(
                     out.push(')');
                 }
                 _ => {
-                    let func = functions.iter().find(|f| f.name == *name);
-                    if let Some(f) = func {
-                        if let Some(ref _struct_name) = f.struct_name {
-                            return Err(src_info.format_error(span, &format!("Method '{}' must be called on an instance", name)));
-                        }
+                    // Обычный вызов функции (глобальной)
+                    let func = functions.iter().find(|f| f.name == *name && f.struct_name.is_none() && f.module_name.is_none());
+                    if func.is_none() {
+                        return Err(src_info.format_error(span, &format!("Function '{}' not defined", name)));
                     }
                     let c_name = if name == "main" { "side_main".to_string() } else { format!("side_{}", name) };
                     out.push_str(&format!("{}(", c_name));
@@ -506,22 +501,38 @@ fn generate_expr(
                 }
             }
         }
-        Expr::MethodCall { instance, method, args, span } => {
-            let instance_type = infer_type(instance, scope, functions, None, src_info, span)?;
-            let struct_name = match instance_type {
-                Type::Struct(name) => name,
-                _ => return Err(src_info.format_error(span, "Method call on non-struct type")),
+        Expr::CallWithTarget { target, method, args, span } => {
+            // Определяем, является ли target переменной
+            let (c_name, is_method) = match target.as_ref() {
+                Expr::Variable(name, _) => {
+                    if let Some(t) = scope.get(name) {
+                        match t {
+                            Type::Struct(s) => (format!("side_{}_{}", s, method), true),
+                            _ => return Err(src_info.format_error(span, &format!("Cannot call '{}' on non-struct variable '{}'", method, name))),
+                        }
+                    } else {
+                        // Не объявлена – считаем модулем
+                        (format!("side_{}_{}", name, method), false)
+                    }
+                }
+                _ => {
+                    let target_type = infer_type(target, scope, functions, None, src_info, span)?;
+                    match target_type {
+                        Type::Struct(s) => (format!("side_{}_{}", s, method), true),
+                        _ => return Err(src_info.format_error(span, &format!("Cannot call '{}' on non-struct expression", method))),
+                    }
+                }
             };
-            let _method_func = functions.iter().find(|f| {
-                f.struct_name.as_ref() == Some(&struct_name) && f.name == *method
-            }).ok_or_else(|| {
-                src_info.format_error(span, &format!("Method '{}' not found for struct '{}'", method, struct_name))
-            })?;
-            let c_name = format!("side_{}_{}", struct_name, method);
+
             out.push_str(&format!("{}(", c_name));
-            generate_expr(instance, out, scope, functions, src_info)?;
-            for arg in args {
-                out.push_str(", ");
+            if is_method {
+                generate_expr(target, out, scope, functions, src_info)?;
+                if !args.is_empty() {
+                    out.push_str(", ");
+                }
+            }
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 { out.push_str(", "); }
                 generate_expr(arg, out, scope, functions, src_info)?;
             }
             out.push(')');
@@ -674,23 +685,55 @@ fn infer_type(
             "str" => Ok(Type::Str),
             "int" => Ok(Type::Int),
             _ => {
-                let func = functions.iter().find(|f| f.name == *name)
+                let func = functions.iter().find(|f| f.name == *name && f.struct_name.is_none() && f.module_name.is_none())
                     .ok_or(src_info.format_error(call_span, &format!("Function '{}' not defined", name)))?;
                 Ok(func.return_type.clone())
             }
         },
-        Expr::MethodCall { instance, method, args: _, span: method_span } => {
-            let instance_type = infer_type(instance, scope, functions, None, src_info, method_span)?;
-            let struct_name = match instance_type {
-                Type::Struct(name) => name,
-                _ => return Err(src_info.format_error(method_span, "Method call on non-struct type")),
-            };
-            let _method_func = functions.iter().find(|f| {
-                f.struct_name.as_ref() == Some(&struct_name) && f.name == *method
-            }).ok_or_else(|| {
-                src_info.format_error(method_span, &format!("Method '{}' not found for struct '{}'", method, struct_name))
-            })?;
-            Ok(_method_func.return_type.clone())
+        Expr::CallWithTarget { target, method, args: _, span: call_span } => {
+            // Определяем, является ли target переменной
+            match target.as_ref() {
+                Expr::Variable(name, _) => {
+                    // Проверяем scope
+                    if let Some(t) = scope.get(name) {
+                        // Если это структура, ищем метод
+                        match t {
+                            Type::Struct(struct_name) => {
+                                let method_func = functions.iter().find(|f| {
+                                    f.struct_name.as_ref() == Some(&struct_name) && f.name == *method
+                                }).ok_or_else(|| {
+                                    src_info.format_error(call_span, &format!("Method '{}' not found for struct '{}'", method, struct_name))
+                                })?;
+                                Ok(method_func.return_type.clone())
+                            }
+                            _ => Err(src_info.format_error(call_span, &format!("Cannot call '{}' on non-struct variable '{}'", method, name))),
+                        }
+                    } else {
+                        // Не объявлена – считаем модулем
+                        let method_func = functions.iter().find(|f| {
+                            f.module_name.as_ref() == Some(name) && f.name == *method
+                        }).ok_or_else(|| {
+                            src_info.format_error(call_span, &format!("Function '{}.{}' not found", name, method))
+                        })?;
+                        Ok(method_func.return_type.clone())
+                    }
+                }
+                _ => {
+                    // Для выражений, не являющихся переменной, вычисляем тип и надеемся, что это структура
+                    let target_type = infer_type(target, scope, functions, None, src_info, call_span)?;
+                    match target_type {
+                        Type::Struct(struct_name) => {
+                            let method_func = functions.iter().find(|f| {
+                                f.struct_name.as_ref() == Some(&struct_name) && f.name == *method
+                            }).ok_or_else(|| {
+                                src_info.format_error(call_span, &format!("Method '{}' not found for struct '{}'", method, struct_name))
+                            })?;
+                            Ok(method_func.return_type.clone())
+                        }
+                        _ => Err(src_info.format_error(call_span, &format!("Cannot call '{}' on non-struct expression", method))),
+                    }
+                }
+            }
         }
         Expr::StructLiteral { name, .. } => Ok(Type::Struct(name.clone())),
         Expr::ArrayLiteral(elements, _) => {
@@ -873,7 +916,8 @@ fn check_function_call(
         _ => {}
     }
 
-    let func = functions.iter().find(|f| f.name == name && f.struct_name.is_none())
+    // Проверяем только глобальные функции (не методы и не модульные)
+    let func = functions.iter().find(|f| f.name == name && f.struct_name.is_none() && f.module_name.is_none())
         .ok_or(src_info.format_error(span, &format!("Function '{}' not defined", name)))?;
     if func.params.len() != args.len() {
         return Err(src_info.format_error(span, &format!("Function '{}' expects {} arguments, got {}", name, func.params.len(), args.len())));
