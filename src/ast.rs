@@ -69,8 +69,8 @@ pub enum Type {
     Int,
     Double,
     Str,
-    Array,
-    DoubleArray,
+    // Новый универсальный массив: если size == None – динамический, иначе статический
+    Array { elem: Box<Type>, size: Option<usize> },
     Struct(String),
 }
 
@@ -189,7 +189,6 @@ pub enum UnaryOp {
     Neg,
 }
 
-// Реализация метода span() для Expr
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
