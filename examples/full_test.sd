@@ -97,7 +97,7 @@ fn main() {
     }
     io.print("Sum 0..4 = ", for_sum, " (expected 10)")
 
-    io.print("=== 7. Int Arrays ===")
+    io.print("=== 7. Int Arrays (dynamic) ===")
     let int[] iarr = []
     push(iarr, 100)
     push(iarr, 200)
@@ -108,7 +108,7 @@ fn main() {
     pop(iarr)
     io.print("After pop length = ", len(iarr), " (expected 2)")
 
-    io.print("=== 8. Double Arrays ===")
+    io.print("=== 8. Double Arrays (dynamic) ===")
     let double[] darr = []
     push(darr, 1.5)
     push(darr, 2.5)
@@ -182,6 +182,17 @@ fn main() {
     let double w = rect.width()
     let double h = rect.height()
     io.print("Rect width = ", w, " height = ", h, " (expected 5, 3)")
+
+    io.print("=== 14. Static Arrays ===")
+    let int[3] static_int = [10, 20, 30]
+    io.print("static_int[0]=", static_int[0], " [1]=", static_int[1], " [2]=", static_int[2], " (expected 10 20 30)")
+    static_int[1] = 99
+    io.print("after change: static_int[1]=", static_int[1], " (expected 99)")
+    io.print("len(static_int)=", len(static_int), " (expected 3)")
+
+    let double[2] static_double = [1.5, 2.7]
+    io.print("static_double[0]=", static_double[0], " [1]=", static_double[1], " (expected 1.5 2.7)")
+    io.print("len(static_double)=", len(static_double), " (expected 2)")
 
     io.print("")
     io.print("=== All tests passed successfully! ===")
