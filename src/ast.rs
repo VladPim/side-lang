@@ -50,7 +50,8 @@ pub struct Field {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
-    pub struct_name: Option<String>, // Some(StructName) если метод
+    pub module_name: Option<String>,
+    pub struct_name: Option<String>,
     pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Vec<Stmt>,
@@ -69,7 +70,6 @@ pub enum Type {
     Int,
     Double,
     Str,
-    // Новый универсальный массив: если size == None – динамический, иначе статический
     Array { elem: Box<Type>, size: Option<usize> },
     Struct(String),
 }
@@ -135,8 +135,8 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
-    MethodCall {
-        instance: Box<Expr>,
+    CallWithTarget {
+        target: Box<Expr>,
         method: String,
         args: Vec<Expr>,
         span: Span,
@@ -198,7 +198,7 @@ impl Expr {
             Expr::Variable(_, span) => *span,
             Expr::Input(_, span) => *span,
             Expr::Call { span, .. } => *span,
-            Expr::MethodCall { span, .. } => *span,
+            Expr::CallWithTarget { span, .. } => *span,
             Expr::StructLiteral { span, .. } => *span,
             Expr::ArrayLiteral(_, span) => *span,
             Expr::Index { span, .. } => *span,
