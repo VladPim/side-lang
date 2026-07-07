@@ -1,0 +1,7 @@
+fn main() {
+    let int[3] arr = [10, 20, 30]
+    io.print("arr[0]=", arr[0], " arr[1]=", arr[1], " arr[2]=", arr[2])
+    arr[1] = 99
+    io.print("after change: arr[1]=", arr[1])
+    io.print("len(arr)=", len(arr))
+}
