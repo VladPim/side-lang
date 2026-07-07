@@ -21,7 +21,6 @@ fn main() {
     let source = fs::read_to_string(source_path)
         .unwrap_or_else(|_| panic!("Could not read source file: {}", source_path));
 
-    // Определяем имя файла и базовое имя без расширения
     let path = Path::new(source_path);
     let file_name = path.file_name().unwrap().to_str().unwrap();
     let stem = path.file_stem().unwrap().to_str().unwrap();
@@ -52,17 +51,14 @@ fn main() {
             std::process::exit(1);
         });
 
-    // Генерируем C-код, передаём имя файла для комментария
     let c_code = codegen::generate(&program, source.clone(), file_name).unwrap_or_else(|e| {
         eprintln!("Compilation error: {}", e);
         std::process::exit(1);
     });
 
-    // Имя C-файла: <stem>.sd_generated.c
     let c_path = format!("{}.sd_generated.c", stem);
     fs::write(&c_path, &c_code).expect("Could not write C file");
 
-    // Имя исполняемого файла: <stem>.exe (Windows) или <stem> (Unix)
     let output_name = if cfg!(windows) {
         format!("{}.exe", stem)
     } else {
@@ -113,28 +109,49 @@ fn process_imports(
             .unwrap_or_else(|| Path::new("."));
         process_imports(&mut imported, imported_base, loaded)?;
 
-        merge_programs(program, imported)?;
+        // Получаем имя модуля
+        let module_name = Path::new(&import_path)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        merge_programs(program, imported, &module_name)?;
     }
     Ok(())
 }
 
-fn merge_programs(target: &mut ast::Program, imported: ast::Program) -> Result<(), String> {
-    for s in imported.structs {
+fn merge_programs(
+    target: &mut ast::Program,
+    imported: ast::Program,
+    module_name: &str,
+) -> Result<(), String> {
+    for mut s in imported.structs {
         if target.structs.iter().any(|existing| existing.name == s.name) {
             return Err(format!("Struct '{}' already defined (import conflict)", s.name));
         }
         target.structs.push(s);
     }
-    for c in imported.constants {
+    for mut c in imported.constants {
         if target.constants.iter().any(|existing| existing.name == c.name) {
             return Err(format!("Constant '{}' already defined (import conflict)", c.name));
         }
         target.constants.push(c);
     }
-    for f in imported.functions {
-        if target.functions.iter().any(|existing| existing.name == f.name) {
-            return Err(format!("Function '{}' already defined (import conflict)", f.name));
+    for mut f in imported.functions {
+        // Проверяем конфликты по полному имени (модуль + имя)
+        let full_name = format!("{}_{}", module_name, f.name);
+        if target.functions.iter().any(|existing| {
+            if let Some(ref mod_name) = existing.module_name {
+                format!("{}_{}", mod_name, existing.name) == full_name
+            } else {
+                false
+            }
+        }) {
+            return Err(format!("Function '{}.{}' already defined (import conflict)", module_name, f.name));
         }
+        f.module_name = Some(module_name.to_string());
         target.functions.push(f);
     }
     Ok(())
