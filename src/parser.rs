@@ -168,48 +168,39 @@ impl Parser {
         let mut return_type = Type::Int;
         let mut name = String::new();
 
-        // Определяем, метод это или обычная функция
         if let Some(Token::Identifier(first)) = self.peek().cloned() {
             let save_pos = self.pos;
-            self.advance(); // съедаем первый идентификатор
+            self.advance();
             if self.peek() == Some(&Token::Dot) {
-                // Это метод!
-                self.advance(); // съедаем точку
+                self.advance();
                 if let Some(Token::Identifier(method_name)) = self.peek().cloned() {
-                    self.advance(); // съедаем имя метода
+                    self.advance();
                     struct_name = Some(first);
                     name = method_name;
                 } else {
                     return Err(self.format_error(self.pos, "Expected method name after '.'"));
                 }
             } else {
-                // Обычная функция: возвращаемся назад
                 self.pos = save_pos;
-                // Парсим возвращаемый тип, если есть
                 match self.peek() {
                     Some(Token::Int) | Some(Token::Double) | Some(Token::Str) => {
                         return_type = self.parse_type()?;
                     }
                     Some(Token::Identifier(_)) => {
-                        // Это может быть тип структуры или имя функции (если без типа)
                         let save_pos2 = self.pos;
                         self.advance();
                         if let Some(Token::Identifier(_)) = self.peek() {
-                            // Это тип структуры, потом имя функции
                             self.pos = save_pos2;
                             return_type = self.parse_type()?;
                         } else {
-                            // Это имя функции без указания типа (по умолчанию Int)
                             self.pos = save_pos2;
                             return_type = Type::Int;
                         }
                     }
                     _ => {
-                        // Нет возвращаемого типа, значит Int по умолчанию
                         return_type = Type::Int;
                     }
                 }
-                // Теперь парсим имя функции
                 if let Some(Token::Identifier(func_name)) = self.peek().cloned() {
                     self.advance();
                     name = func_name;
@@ -221,7 +212,6 @@ impl Parser {
             return Err(self.format_error(self.pos, "Expected function name or struct name"));
         }
 
-        // Парсим параметры
         self.expect(Token::LParen)?;
         let mut params = vec![];
         if self.peek() != Some(&Token::RParen) {
@@ -244,7 +234,6 @@ impl Parser {
         }
         self.expect(Token::RParen)?;
 
-        // Возвращаемый тип (если есть ->)
         if self.peek() == Some(&Token::Arrow) {
             self.advance();
             return_type = self.parse_type()?;
@@ -280,18 +269,38 @@ impl Parser {
             Some(Token::Int) => {
                 self.advance();
                 if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
+                    self.advance(); // съедаем '['
+                    // Проверяем, есть ли число внутри
+                    let size = if let Some(Token::Number(n)) = self.peek().cloned() {
+                        self.advance();
+                        Some(n as usize)
+                    } else {
+                        // Пустые скобки -> динамический массив
+                        None
+                    };
                     self.expect(Token::RBracket)?;
-                    return Ok(Type::Array);
+                    return Ok(Type::Array {
+                        elem: Box::new(Type::Int),
+                        size,
+                    });
                 }
                 Ok(Type::Int)
             }
             Some(Token::Double) => {
                 self.advance();
                 if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
+                    self.advance();
+                    let size = if let Some(Token::Number(n)) = self.peek().cloned() {
+                        self.advance();
+                        Some(n as usize)
+                    } else {
+                        None
+                    };
                     self.expect(Token::RBracket)?;
-                    return Ok(Type::DoubleArray);
+                    return Ok(Type::Array {
+                        elem: Box::new(Type::Double),
+                        size,
+                    });
                 }
                 Ok(Type::Double)
             }
@@ -300,15 +309,20 @@ impl Parser {
                 Ok(Type::Str)
             }
             Some(Token::Identifier(name)) => {
+                // Пока структуры не могут быть массивами, но в будущем можно расширить
                 let n = name.clone();
                 self.advance();
+                // Проверяем, не идёт ли после идентификатора '[' (например, Point[10])
+                if self.peek() == Some(&Token::LBracket) {
+                    return Err(self.format_error(self.pos, "Static arrays of structs are not yet supported"));
+                }
                 Ok(Type::Struct(n))
             }
             _ => Ok(Type::Int),
         }
     }
 
-    // -------- Операторы ----------
+    // -------- Остальные парсеры (без изменений) ----------
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek() {
             Some(Token::Let) => self.parse_let(),
@@ -341,9 +355,15 @@ impl Parser {
             Some(Token::Int) => {
                 self.advance();
                 if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
+                    self.advance();
+                    let size = if let Some(Token::Number(n)) = self.peek().cloned() {
+                        self.advance();
+                        Some(n as usize)
+                    } else {
+                        None
+                    };
                     self.expect(Token::RBracket)?;
-                    Some(Type::Array)
+                    Some(Type::Array { elem: Box::new(Type::Int), size })
                 } else {
                     Some(Type::Int)
                 }
@@ -351,9 +371,15 @@ impl Parser {
             Some(Token::Double) => {
                 self.advance();
                 if self.peek() == Some(&Token::LBracket) {
-                    self.expect(Token::LBracket)?;
+                    self.advance();
+                    let size = if let Some(Token::Number(n)) = self.peek().cloned() {
+                        self.advance();
+                        Some(n as usize)
+                    } else {
+                        None
+                    };
                     self.expect(Token::RBracket)?;
-                    Some(Type::DoubleArray)
+                    Some(Type::Array { elem: Box::new(Type::Double), size })
                 } else {
                     Some(Type::Double)
                 }
@@ -604,7 +630,7 @@ impl Parser {
             self.advance();
             let then_expr = self.parse_expr()?;
             self.expect(Token::Colon)?;
-            let else_expr = self.parse_ternary()?; // правоассоциативность
+            let else_expr = self.parse_ternary()?;
             let span = cond.span().merge(&else_expr.span());
             Ok(Expr::Ternary {
                 condition: Box::new(cond),
