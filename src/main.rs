@@ -21,6 +21,11 @@ fn main() {
     let source = fs::read_to_string(source_path)
         .unwrap_or_else(|_| panic!("Could not read source file: {}", source_path));
 
+    // Определяем имя файла и базовое имя без расширения
+    let path = Path::new(source_path);
+    let file_name = path.file_name().unwrap().to_str().unwrap();
+    let stem = path.file_stem().unwrap().to_str().unwrap();
+
     let lexer = token::Token::lexer(&source);
     let tokens: Vec<(token::Token, std::ops::Range<usize>)> = lexer.spanned().collect();
 
@@ -47,22 +52,25 @@ fn main() {
             std::process::exit(1);
         });
 
-    let path = Path::new(source_path);
-    let stem = path.file_stem().unwrap().to_str().unwrap();
-    let c_path = format!("{}.sd_generated.c", stem);
-
-    let c_code = codegen::generate(&program, source.clone(), source_path).unwrap_or_else(|e| {
+    // Генерируем C-код, передаём имя файла для комментария
+    let c_code = codegen::generate(&program, source.clone(), file_name).unwrap_or_else(|e| {
         eprintln!("Compilation error: {}", e);
         std::process::exit(1);
     });
 
-    println!("Generated C code:\n{}", c_code);
-
+    // Имя C-файла: <stem>.sd_generated.c
+    let c_path = format!("{}.sd_generated.c", stem);
     fs::write(&c_path, &c_code).expect("Could not write C file");
 
-    let output_name = if cfg!(windows) { "hello.exe" } else { "hello" };
+    // Имя исполняемого файла: <stem>.exe (Windows) или <stem> (Unix)
+    let output_name = if cfg!(windows) {
+        format!("{}.exe", stem)
+    } else {
+        stem.to_string()
+    };
+
     let status = Command::new("gcc")
-        .args(&[&c_path, "-o", output_name, "-lm"])
+        .args(&[&c_path, "-o", &output_name, "-lm"])
         .status()
         .expect("Failed to run gcc. Is GCC installed and in PATH?");
 
