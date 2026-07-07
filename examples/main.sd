@@ -1,0 +1,7 @@
+import math
+
+fn main() {
+    let int x = math.add(10, 20)
+    let int y = math.mul(x, 2)
+    io.print("Result: ", y)
+}
