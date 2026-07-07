@@ -47,7 +47,6 @@ fn main() {
             std::process::exit(1);
         });
 
-    // Получаем имя файла без расширения для генерации C-файла
     let path = Path::new(source_path);
     let stem = path.file_stem().unwrap().to_str().unwrap();
     let c_path = format!("{}.sd_generated.c", stem);
