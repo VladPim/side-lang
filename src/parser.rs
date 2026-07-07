@@ -84,11 +84,18 @@ impl Parser {
 
     fn parse_import(&mut self) -> Result<String, String> {
         self.expect(Token::Import)?;
-        if let Some(Token::StringLiteral(path)) = self.peek().cloned() {
-            self.advance();
-            Ok(path)
-        } else {
-            Err(self.format_error(self.pos, "Expected string literal after 'import'"))
+        match self.peek() {
+            Some(Token::StringLiteral(path)) => {
+                let path = path.clone();
+                self.advance();
+                Ok(path)
+            }
+            Some(Token::Identifier(name)) => {
+                let name = name.clone();
+                self.advance();
+                Ok(format!("{}.sd", name))
+            }
+            _ => Err(self.format_error(self.pos, "Expected string literal or identifier after 'import'"))
         }
     }
 
@@ -165,6 +172,7 @@ impl Parser {
         self.expect(Token::Fn)?;
 
         let mut struct_name = None;
+        let mut module_name = None;
         let mut return_type = Type::Int;
         let mut name = String::new();
 
@@ -246,6 +254,7 @@ impl Parser {
 
         Ok(Function {
             name,
+            module_name,
             struct_name,
             params,
             return_type,
@@ -269,20 +278,15 @@ impl Parser {
             Some(Token::Int) => {
                 self.advance();
                 if self.peek() == Some(&Token::LBracket) {
-                    self.advance(); // съедаем '['
-                    // Проверяем, есть ли число внутри
+                    self.advance();
                     let size = if let Some(Token::Number(n)) = self.peek().cloned() {
                         self.advance();
                         Some(n as usize)
                     } else {
-                        // Пустые скобки -> динамический массив
                         None
                     };
                     self.expect(Token::RBracket)?;
-                    return Ok(Type::Array {
-                        elem: Box::new(Type::Int),
-                        size,
-                    });
+                    return Ok(Type::Array { elem: Box::new(Type::Int), size });
                 }
                 Ok(Type::Int)
             }
@@ -297,10 +301,7 @@ impl Parser {
                         None
                     };
                     self.expect(Token::RBracket)?;
-                    return Ok(Type::Array {
-                        elem: Box::new(Type::Double),
-                        size,
-                    });
+                    return Ok(Type::Array { elem: Box::new(Type::Double), size });
                 }
                 Ok(Type::Double)
             }
@@ -309,10 +310,8 @@ impl Parser {
                 Ok(Type::Str)
             }
             Some(Token::Identifier(name)) => {
-                // Пока структуры не могут быть массивами, но в будущем можно расширить
                 let n = name.clone();
                 self.advance();
-                // Проверяем, не идёт ли после идентификатора '[' (например, Point[10])
                 if self.peek() == Some(&Token::LBracket) {
                     return Err(self.format_error(self.pos, "Static arrays of structs are not yet supported"));
                 }
@@ -322,7 +321,7 @@ impl Parser {
         }
     }
 
-    // -------- Остальные парсеры (без изменений) ----------
+    // -------- Операторы ----------
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek() {
             Some(Token::Let) => self.parse_let(),
@@ -758,26 +757,26 @@ impl Parser {
                     expr = Expr::Index { array: Box::new(expr), index: Box::new(index), span };
                 }
                 Some(Token::Dot) => {
-                    let _start = self.pos;
+                    let start = self.pos;
                     self.advance();
-                    let field = if let Some(Token::Identifier(f)) = self.peek().cloned() {
+                    if let Some(Token::Identifier(field)) = self.peek().cloned() {
                         self.advance();
-                        f
+                        let span = expr.span().merge(&self.current_span());
+                        // Проверяем, есть ли после поля '('
+                        if self.peek() == Some(&Token::LParen) {
+                            let args = self.parse_call_args()?;
+                            let call_span = span.merge(&self.current_span());
+                            expr = Expr::CallWithTarget {
+                                target: Box::new(expr),
+                                method: field,
+                                args,
+                                span: call_span,
+                            };
+                        } else {
+                            expr = Expr::FieldAccess { expr: Box::new(expr), field, span };
+                        }
                     } else {
                         return Err(self.format_error(self.pos, "Expected field name after '.'"));
-                    };
-                    let span = expr.span().merge(&self.current_span());
-                    if self.peek() == Some(&Token::LParen) {
-                        let args = self.parse_call_args()?;
-                        let call_span = span.merge(&self.current_span());
-                        expr = Expr::MethodCall {
-                            instance: Box::new(expr),
-                            method: field,
-                            args,
-                            span: call_span,
-                        };
-                    } else {
-                        expr = Expr::FieldAccess { expr: Box::new(expr), field, span };
                     }
                 }
                 _ => break,
